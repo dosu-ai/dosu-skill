@@ -20,7 +20,31 @@ Activate when the user wants to:
 
 ## Prerequisites
 
-The CLI now has a split auth model:
+### Step 0 — Verify the Dosu CLI is installed
+
+Before running anything else, check that `dosu` is on the PATH:
+
+```bash
+dosu --version
+```
+
+**If `dosu` is not found**, ask the user **one** question and stop:
+
+> Dosu CLI isn't installed on this machine. Want me to install it for you?
+> Pick one:
+> - **npm** (cross-platform, needs Node 18+): `npm install -g @dosu/cli`
+> - **Homebrew** (macOS/Linux, cleanest — no Gatekeeper prompt): `brew install dosu-ai/dosu/dosu`
+> - **curl** (macOS/Linux without Node): `curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh`
+
+After the user picks one and confirms, run that exact command, then re-run `dosu --version` to verify before continuing.
+
+Do NOT use `npx @dosu/cli` as a workaround — it runs the CLI once but does **not** install the `dosu` command. The skill's commands (`dosu ask`, `dosu docs`, etc.) require `dosu` to be on the PATH.
+
+Do NOT pre-emptively run `which dosu`, `npm ls -g`, `brew list`, `ls /usr/local/bin/dosu`, etc. — `dosu --version` is the only check you need.
+
+### Step 1 — Authenticate
+
+Once the CLI is installed, the split auth model:
 
 ```bash
 dosu login    # Browser OAuth → saves access token for JWT-authenticated tRPC commands
@@ -159,6 +183,7 @@ When acting as an agent, always pass `--json` to get structured output. Parse th
 
 ### Error handling
 
+- **`command not found: dosu`** → CLI is not installed. Go back to Prerequisites § Step 0 and ask the user to pick an install method. Do not retry `dosu` until install is verified with `dosu --version`.
 - **"Not logged in"** → Run `dosu login` (needed for all tRPC commands and hybrid JWT+API-key commands)
 - **"API key not configured"** → Run `dosu setup` (needed for `ask`, `docs generate`, `docs auto-tag`, `docs publish`)
 - **"Missing space/org config"** → Run `dosu setup` to select a deployment
