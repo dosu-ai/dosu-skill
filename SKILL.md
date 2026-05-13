@@ -58,24 +58,73 @@ dosu status   # Verify: shows login state, deployment, and mode
 
 If a command fails with "Not logged in", run `dosu login`. If it fails with "API key not configured" or "Run 'dosu setup'", run `dosu setup`.
 
+**For agent-driven flows**, prefer `dosu setup --agent --tool <id>` (see [Agent-assisted setup](#agent-assisted-setup) below). It composes login + setup in a non-blocking, JSON-output, ticket-based flow designed for coding agents running the CLI on the user's behalf.
+
 ## Agent-assisted setup
 
-When the user asks you to set up Dosu for an agent, do not start with a long questionnaire. Infer the target agent when it is obvious, otherwise ask only which agent to configure.
+When the user asks you to set up Dosu for their coding agent, do not start with a long questionnaire. Infer the target agent when it is obvious (you are Claude Code → `--tool claude`; you are running inside Cursor → `--tool cursor`; etc.); otherwise ask only which agent to configure and proceed.
 
-Prefer the agent-friendly setup path:
+Run the agent-friendly setup command:
 
 ```bash
-dosu setup --agent --tool codex
+dosu setup --agent --tool <id>
 ```
 
-Replace `codex` with the target tool id. Common ids include `codex`, `claude`, `cursor`, `vscode`, `gemini`, `windsurf`, `zed`, `cline`, `cline-cli`, `copilot`, `opencode`, `antigravity`, and `mcporter`. Run `dosu mcp list` if unsure.
+Replace `<id>` with the target tool id. Common ids: `codex`, `claude`, `cursor`, `vscode`, `gemini`, `windsurf`, `zed`, `cline`, `cline-cli`, `copilot`, `opencode`, `antigravity`, `mcporter`. Run `dosu mcp list` if unsure.
 
-How to handle the flow:
-- If the CLI prints a login URL, send it to the user and ask them to complete login. Keep the command running while it waits for the browser callback.
-- If the CLI needs a deployment and cannot infer it, run `dosu deployments list --json`, show the choices, and ask the user which deployment to use.
-- Avoid GitHub repo/docs onboarding during the first agent setup unless the user explicitly asks for it; `--agent` already uses this simpler path.
-- After setup completes, run `dosu status` to verify the selected deployment and auth state.
-- Use `dosu mcp add <tool> --global` later if you only need to reconfigure one tool after setup has already created the API key.
+### How `--agent` mode behaves
+
+`--agent` is **non-interactive** and emits **one JSON line per step** (NDJSON) to stdout. Every event has a `status` field; events that need follow-up include an `agent_next_steps` field telling you exactly what to do. Always read the JSON — don't rely on text formatting.
+
+The command **always exits in a few seconds** — it never blocks waiting for a browser callback. If the user is not signed in, the CLI returns a login ticket and exits; you relay the URL, wait for the user to confirm, then re-run a follow-up command with that ticket.
+
+### Steps the agent should follow
+
+1. **Run** `dosu setup --agent --tool <id>` and capture stdout.
+
+2. **For each JSON line**, switch on `status`:
+
+   - `"need_user_action"` — the CLI minted a login ticket. The event includes a `url` (where the user signs in) and a `resume_command` (what you run after they confirm). Do this:
+     1. Show the user the `url` and ask them to open it and complete sign-in.
+     2. After the user confirms they signed in, run the exact `resume_command` string (it already contains `--login-ticket`).
+   - `"pending"` (only after running a `resume_command`) — the user hasn't finished signing in yet. Ask the user to confirm again, then re-run the same `resume_command`.
+   - `"ok"` — progress event for `auth`, `deployment`, `api_key`, `mcp_install`, etc. Keep reading.
+   - `"error"` — read `reason` (machine code) and `agent_next_steps` (human/agent fallback). Common reasons:
+     - `multiple_deployments` — the user has more than one deployment. Run `dosu deployments list --json`, show options, ask the user to pick, then re-run the original command with `--deployment <id>` appended.
+     - `unknown_tool` / `tool_unsupported_in_agent_mode` — fix the `--tool` value and retry.
+     - `ticket_expired` — re-run the same `dosu setup --agent --tool <id>` (without `--login-ticket`) to mint a fresh ticket.
+   - `"done"` — setup succeeded. Tell the user setup is complete.
+
+3. **After `"done"`**, run `dosu status` to verify, and prompt the user to try a Dosu question in their agent.
+
+### Example event flow
+
+```jsonc
+// First call: user is not signed in
+{"step":"auth","status":"need_user_action",
+ "ticket":"…","url":"https://app.dosu.dev/cli/auth?ticket=…",
+ "resume_command":"npx @dosu/cli@latest setup --agent --tool claude --login-ticket …",
+ "expires_in":600,
+ "agent_next_steps":"Give the URL to the user so they can sign in. Wait for confirmation, then run resume_command to finish setup."}
+
+// After user confirms sign-in and you run resume_command:
+{"step":"auth","status":"ok","email":"user@example.com"}
+{"step":"deployment","status":"ok","deployment_id":"…","name":"acme/main"}
+{"step":"api_key","status":"ok","reused":false}
+{"step":"mcp_install","status":"ok","tool":"claude","tool_name":"Claude Code","config_path":"…"}
+{"step":"done","status":"ok","agent_next_steps":"Dosu MCP is configured for Claude Code. …"}
+```
+
+### Lower-level primitives
+
+`dosu setup --agent` composes two lower-level commands you can also invoke directly when you only need auth:
+
+```bash
+dosu login --request --json                # Mint ticket; prints {ticket,url,check_command,agent_next_steps}; exits
+dosu login --check <ticket> --json         # Redeem ticket → save tokens; returns status authenticated|pending|expired
+```
+
+These mirror Netlify CLI's `login --request` / `--check` and are useful when you just need to authenticate the CLI without touching MCP config.
 
 ## Key concepts
 
@@ -203,8 +252,8 @@ When acting as an agent, always pass `--json` to get structured output. Parse th
 ### Error handling
 
 - **`command not found: dosu`** → CLI is not installed. Go back to Prerequisites § Step 0 and ask the user to pick an install method. Do not retry `dosu` until install is verified with `dosu --version`.
-- **"Not logged in"** → Run `dosu login` (needed for all tRPC commands and hybrid JWT+API-key commands)
-- **"API key not configured"** → Run `dosu setup` (needed for `ask`, `docs generate`, `docs auto-tag`, `docs publish`)
+- **"Not logged in"** → Run `dosu login` (needed for all tRPC commands and hybrid JWT+API-key commands). For agent-driven flows, use `dosu login --request --json` instead and follow the returned `agent_next_steps`.
+- **"API key not configured"** → Run `dosu setup` (needed for `ask`, `docs generate`, `docs auto-tag`, `docs publish`). For agent flows, use `dosu setup --agent --tool <id>`.
 - **"Missing space/org config"** → Run `dosu setup` to select a deployment
 - **"No knowledge store found"** → The current deployment has no knowledge store configured
 - **"session expired"** → The CLI auto-refreshes tokens, but if refresh fails, run `dosu login` again
