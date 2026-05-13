@@ -1,6 +1,6 @@
 ---
 name: dosu
-description: 'Guide for using the Dosu CLI to manage knowledge bases, documents, conversations, team members, and integrations. Use when the user wants to search their knowledge base, create or edit documents, manage threads, check analytics, review document changes, import docs from GitHub/Confluence/Notion, or perform any Dosu platform operation without opening the web dashboard.'
+description: 'Guide for using the Dosu CLI to set up Dosu for coding agents, configure Dosu MCP, authenticate, select deployments, and manage knowledge bases, documents, conversations, team members, and integrations. Use when the user wants to set up Dosu CLI or MCP for an agent, search their knowledge base, create or edit documents, manage threads, check analytics, review document changes, import docs from GitHub/Confluence/Notion, or perform any Dosu platform operation without opening the web dashboard.'
 ---
 
 # Using the Dosu CLI
@@ -33,6 +33,25 @@ dosu status   # Verify: shows login state, deployment, and mode
 - For full CLI capability, agents should usually run **both** `dosu login` and `dosu setup` before starting work.
 
 If a command fails with "Not logged in", run `dosu login`. If it fails with "API key not configured" or "Run 'dosu setup'", run `dosu setup`.
+
+## Agent-assisted setup
+
+When the user asks you to set up Dosu for an agent, do not start with a long questionnaire. Infer the target agent when it is obvious, otherwise ask only which agent to configure.
+
+Prefer the agent-friendly setup path:
+
+```bash
+dosu setup --agent --tool codex
+```
+
+Replace `codex` with the target tool id. Common ids include `codex`, `claude`, `cursor`, `vscode`, `gemini`, `windsurf`, `zed`, `cline`, `cline-cli`, `copilot`, `opencode`, `antigravity`, and `mcporter`. Run `dosu mcp list` if unsure.
+
+How to handle the flow:
+- If the CLI prints a login URL, send it to the user and ask them to complete login. Keep the command running while it waits for the browser callback.
+- If the CLI needs a deployment and cannot infer it, run `dosu deployments list --json`, show the choices, and ask the user which deployment to use.
+- Avoid GitHub repo/docs onboarding during the first agent setup unless the user explicitly asks for it; `--agent` already uses this simpler path.
+- After setup completes, run `dosu status` to verify the selected deployment and auth state.
+- Use `dosu mcp add <tool> --global` later if you only need to reconfigure one tool after setup has already created the API key.
 
 ## Key concepts
 
