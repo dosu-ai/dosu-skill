@@ -7,15 +7,19 @@ All commands support `--json` for structured output and `--help` for detailed us
 | Command | Description |
 |---------|-------------|
 | `dosu login` | Authenticate via browser OAuth |
+| `dosu login --request [--json]` | Mint a login ticket for agent / human-in-the-loop auth — prints URL + ticket and exits |
+| `dosu login --check <ticket> [--json]` | Exchange a ticket created with `--request` for tokens (status: `authenticated` / `pending` / `expired`) |
 | `dosu logout` | Clear saved credentials |
 | `dosu status` | Show login state, deployment, and mode |
 | `dosu setup` | Interactive setup: auth → org → deployment → tools |
+| `dosu setup --agent --tool <id>` | Non-interactive agent setup. Emits NDJSON with `agent_next_steps`. Use `--login-ticket <t>` to resume after the user signs in, and `--deployment <id>` when the user has multiple deployments. |
 
 ### Auth quick guide
 
 - **JWT (`dosu login`)** powers all tRPC-backed commands.
 - **API key (`dosu setup`)** is still required for backend/Python-backed commands like `dosu ask`.
 - **Hybrid commands** `dosu docs generate`, `dosu docs auto-tag`, and `dosu docs publish` require both login and setup.
+- **Agent-driven flows** should use `dosu setup --agent --tool <id>` (or the lower-level `dosu login --request` / `--check`) — these never block on a localhost callback and always emit JSON with `agent_next_steps`.
 
 ## Knowledge & Search
 
