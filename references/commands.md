@@ -25,6 +25,8 @@ All commands support `--json` for structured output and `--help` for detailed us
 
 | Command | Description |
 |---------|-------------|
+| `dosu write "<fact>"` | Save a fact or insight to the knowledge base |
+| `dosu read [query]` | Retrieve relevant context from the knowledge base |
 | `dosu ask <question>` | AI-generated answer from knowledge base |
 | `dosu knowledge search <query>` | Semantic search across all documents |
 | `dosu knowledge list` | Show knowledge store info for current deployment |
