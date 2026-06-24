@@ -133,3 +133,26 @@ dosu status
 ```
 
 **Agent reasoning**: Switching deployments changes the active space_id and org_id in the local config. All subsequent commands operate against the new deployment.
+
+## Scenario 7: "What docs can Dosu generate for this repo?"
+
+The user wants Dosu to audit the codebase and create/refresh `AGENTS.md`, `README.md`,
+`architecture.md`, or `deps.md`.
+
+```bash
+# Step 0 (in the coding agent): run the codebase audit.
+# Inspect the working tree + Dosu MCP, then write .dosu/audit.json.
+# See references/audit.md for the full procedure and references/audit-findings-schema.md
+# for the file format. The agent does NOT write the docs themselves.
+
+# Step 1: hand off to the CLI — it reads .dosu/audit.json, asks which docs to generate,
+# fires server-side generation, and Dosu cloud opens a PR.
+dosu audit
+
+# The command returns immediately; the PR is surfaced on a later `dosu` run,
+# like the "update available" notice.
+```
+
+**Agent reasoning**: The audit is triage done in the coding agent (it has the live working tree);
+generation and the PR happen on Dosu cloud, gated by the user's selection in `dosu audit`. Recommend
+`architecture.md` only when the repo is structured enough to warrant one.

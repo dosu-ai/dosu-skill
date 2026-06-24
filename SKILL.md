@@ -1,6 +1,6 @@
 ---
 name: dosu
-description: 'Guide for using the Dosu CLI to set up Dosu for coding agents, configure Dosu MCP, authenticate, select deployments, and manage knowledge bases, documents, conversations, team members, and integrations. Use when the user wants to set up Dosu CLI or MCP for an agent, search their knowledge base, create or edit documents, manage threads, check analytics, review document changes, import docs from GitHub/Confluence/Notion, or perform any Dosu platform operation without opening the web dashboard.'
+description: 'Guide for using the Dosu CLI to set up Dosu for coding agents, configure Dosu MCP, authenticate, select deployments, and manage knowledge bases, documents, conversations, team members, and integrations. Use when the user wants to set up Dosu CLI or MCP for an agent, search their knowledge base, create or edit documents, manage threads, check analytics, review document changes, import docs from GitHub/Confluence/Notion, audit a codebase for docs Dosu can generate (AGENTS.md, README.md, architecture.md, deps.md), or perform any Dosu platform operation without opening the web dashboard.'
 ---
 
 # Using the Dosu CLI
@@ -95,7 +95,7 @@ The command **always exits in a few seconds** — it never blocks waiting for a 
      - `ticket_expired` — re-run the same `dosu setup --agent --tool <id>` (without `--login-ticket`) to mint a fresh ticket.
    - `"done"` — setup succeeded. Tell the user setup is complete.
 
-3. **After `"done"`**, run `dosu status` to verify, and prompt the user to try a Dosu question in their agent.
+3. **After `"done"`**, run `dosu status` to verify. Then offer the codebase audit — e.g. *"Dosu's set up. Want me to check what docs Dosu can generate for this repo (AGENTS.md, README, architecture, deps)?"* If the user agrees, run the audit and hand off to generation per [Codebase audit](#codebase-audit) below. Also invite them to try a Dosu question in their agent.
 
 ### Example event flow
 
@@ -253,6 +253,50 @@ dosu integrations list --json     # Connection status for all platforms
 dosu sources list --json          # Connected data sources
 ```
 
+## Codebase audit
+
+When the user asks what Dosu can do for their codebase — or asks to set up / refresh their agent
+docs, README, architecture doc, or dependency doc — run a **codebase audit**. You inspect the
+working tree and decide, with evidence, whether Dosu can help by creating or refreshing four docs:
+`AGENTS.md`, `README.md`, `architecture.md`, and `deps.md`.
+
+The audit is **triage only**: you inspect the repo and write findings to `.dosu/audit.json`. You do
+**not** write the docs yourself — Dosu cloud generates them and opens a PR once the user picks which
+ones to do.
+
+High level:
+
+1. Identify the repo (`git config --get remote.origin.url` → `owner/name`).
+2. Inspect the working tree for each of the four doc types (exists? stale? enough structure?).
+3. Use the Dosu MCP tools (`init_knowledge`, then `ask` / `search_documentation`) to factor in org
+   knowledge before deciding.
+4. Write `.dosu/audit.json` (one entry per doc type assessed). Gate `architecture.md` strictly —
+   only recommend it when the repo is structured enough to warrant one.
+
+### Handing off to generation — two paths
+
+**Agent-driven (preferred when you're in the loop, e.g. right after setup).** Present the picks to
+the user in chat — list each offerable doc with its confidence and a one-line reason, and ask which
+they want. Then fire exactly their choices, non-interactively:
+
+```bash
+dosu audit --tasks generate-agents-md,generate-deps-md --json
+```
+
+This prints `{ "task_ids": [...] }` and returns immediately; Dosu cloud generates the docs and opens
+a PR. The user is notified of the PR on a later `dosu` run (like the update notice). Only pass task
+ids that you offered (the `task` field of `can_help` items in `.dosu/audit.json`).
+
+**CLI-only (the user drives the terminal).** Just tell them: *"Audit complete — run `dosu audit` to
+choose which docs Dosu should generate."* The CLI reads `.dosu/audit.json`, shows an interactive
+multiselect, and fires the selected tasks. Use this when you are not able to present the picks
+yourself (no chat surface).
+
+In both cases the repo must be connected to Dosu (done during `dosu setup`); `dosu audit` enforces
+that before firing.
+
+Follow the full procedure and output format in the reference files below before running the audit.
+
 ## Agent guidelines
 
 ### Always use `--json`
@@ -303,3 +347,5 @@ If the user has run `dosu login` but not `dosu setup`, most tRPC commands will w
 - [Command reference](references/commands.md) — Complete command tree with all subcommands
 - [Workflow examples](references/workflows.md) — End-to-end scenarios for common tasks
 - [Review workflow](references/review-workflow.md) — Working the review queue safely, with PR context
+- [Codebase audit](references/audit.md) — Full procedure for auditing a repo and writing `.dosu/audit.json`
+- [Audit findings schema](references/audit-findings-schema.md) — The `.dosu/audit.json` format the `dosu audit` CLI reads
