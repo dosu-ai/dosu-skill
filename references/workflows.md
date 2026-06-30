@@ -71,24 +71,29 @@ dosu sources sync <source-id> --json
 
 ## Scenario 4: "Review and approve pending changes"
 
-Documents updated by AI or team members need review.
+Dosu queues document versions (AI-generated, user-edited, synced from source, API-created) and draft messages for human review. Work the queue directly with the `dosu review` commands. See [Review workflow](review-workflow.md) for the full flow and safety rules.
 
 ```bash
-# Step 1: Find threads with pending reviews
-dosu threads list --status pending --json
+# Step 1: See what's pending — ID, Kind, Title, Source, Status, Created
+dosu review list --json
 
-# Step 2: Get review context
-dosu review context <thread-id> --json
-# Returns: { type: "document", reviewPage: {...}, publishedPage: {...}, previousVersion: {...} }
+# Step 2: Read the exact change before touching it
+dosu review diff <page-version-id> --json
 
-# Step 3: Read the document under review
-dosu docs get <review-page-id> --json
+# Step 3 (optional): Fix it up in place instead of rejecting
+dosu review edit <page-version-id> --body-file ./revised.md
 
-# Step 4: Approve or reject
-dosu review approve <page-version-id> --json
+# Step 4: Apply — only after the user OKs this specific item.
+#   Agents are non-interactive, so --confirm is REQUIRED to actually apply;
+#   without it the command prints the diff and aborts.
+dosu review approve <page-version-id> --confirm --json
+dosu review reject  <page-version-id> --confirm --json
+
+# Undo: send an already-decided item back to pending
+dosu review revert <page-version-id> --json
 ```
 
-**Agent reasoning**: The review context tells you whether a thread is about a message, topic, or document. Only document-type threads have versions to approve/reject.
+**Agent reasoning**: Act on the specific `id` the user named — never loop `list` into a batch approve. Read the `diff` first, confirm the decision with the user, then pass `--confirm`. Treat `Synced from source` items and anything with a Sync PR (see `dosu review context <thread-id>`) with extra care: approving pushes back to the upstream source.
 
 ## Scenario 5: "Check team health and manage access"
 
