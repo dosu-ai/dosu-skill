@@ -207,7 +207,7 @@ dosu docs sync-back <page-id> --json
 Approving and rejecting are destructive, outward-facing actions. Follow these rules:
 
 - **Act on an explicit item.** Only approve/reject the `id` the user named. If they say "review my queue", run `dosu review list` and show it — do not decide for them.
-- **Diff before deciding.** Run `dosu review diff <id>` and show the user what changes. `approve`/`reject` print the diff too, but agents are non-interactive: they get no prompt, so they **must** pass `--confirm` to apply — and should only do so after the user OKs that specific item.
+- **Diff before deciding.** Run `dosu review diff <id>` and show the user what changes. Under `--json` (which agents always use) `approve`/`reject` print **no** preview and **no** prompt, so `diff` is the only way to see the change first. To apply, the agent **must** pass `--confirm`; without it the command changes nothing and returns `{ "applied": false, "confirmRequired": true }`. Only pass `--confirm` after the user OKs that specific item.
 - **Never batch-accept.** No loop that approves everything in `list`. One item, one confirmation.
 - **Extra care for sync/PR-origin items.** Items with `Source: Synced from source` (`origin: sync_upstream`) or a `Sync PR` URL in `dosu review context` push back to an upstream system on approval. Call this out and get explicit sign-off before approving.
 
