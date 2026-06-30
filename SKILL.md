@@ -178,12 +178,22 @@ dosu suggest accept <id> --json   # Accept and create a document from a suggesti
 Documents go through a lifecycle: **draft → review → published → synced**.
 
 ```bash
-# Check review context for a thread
-dosu review context <thread-id> --json
+# List the review queue: doc versions + draft messages (ID, Kind, Title, Source, Status, Created)
+dosu review list --json
 
-# Approve, reject, or revert a document version
-dosu review approve <page-version-id> --json
-dosu review reject <page-version-id> --json
+# Read the exact change before acting
+dosu review diff <page-version-id> --json
+
+# Edit a pending version in place instead of rejecting it
+dosu review edit <page-version-id> --body-file ./revised.md
+
+# Apply a decision — see the safety rules below. --confirm is required for agents.
+dosu review approve <page-version-id> --confirm --json
+dosu review reject <page-version-id> --confirm --json
+dosu review revert <page-version-id> --json   # undo: back to pending
+
+# Map a thread to its review (type, page IDs, Sync PR URL)
+dosu review context <thread-id> --json
 
 # Publish to external platform
 dosu docs publish <page-id> --to confluence --parent-page-id <id> --data-source-id <id> --json
@@ -191,6 +201,17 @@ dosu docs publish <page-id> --to confluence --parent-page-id <id> --data-source-
 # Sync changes back to source (Notion/Confluence bidirectional sync)
 dosu docs sync-back <page-id> --json
 ```
+
+#### Reviewing changes safely
+
+Approving and rejecting are destructive, outward-facing actions. Follow these rules:
+
+- **Act on an explicit item.** Only approve/reject the `id` the user named. If they say "review my queue", run `dosu review list` and show it — do not decide for them.
+- **Diff before deciding.** Run `dosu review diff <id>` and show the user what changes. Under `--json` (which agents always use) `approve`/`reject` print **no** preview and **no** prompt, so `diff` is the only way to see the change first. To apply, the agent **must** pass `--confirm`; without it the command changes nothing and returns `{ "applied": false, "confirmRequired": true }`. Only pass `--confirm` after the user OKs that specific item.
+- **Never batch-accept.** No loop that approves everything in `list`. One item, one confirmation.
+- **Extra care for sync/PR-origin items.** Items with `Source: Synced from source` (`origin: sync_upstream`) or a `Sync PR` URL in `dosu review context` push back to an upstream system on approval. Call this out and get explicit sign-off before approving.
+
+See [Review workflow](references/review-workflow.md) for the end-to-end session, including feeding PR context.
 
 ### 4. Importing external documentation
 
@@ -281,3 +302,4 @@ If the user has run `dosu login` but not `dosu setup`, most tRPC commands will w
 
 - [Command reference](references/commands.md) — Complete command tree with all subcommands
 - [Workflow examples](references/workflows.md) — End-to-end scenarios for common tasks
+- [Review workflow](references/review-workflow.md) — Working the review queue safely, with PR context
