@@ -81,12 +81,19 @@ All commands support `--json` for structured output and `--help` for detailed us
 
 ## Review
 
+See [Review workflow](review-workflow.md) for the end-to-end flow, triage rules, and safety guidance.
+
 | Command | Description |
 |---------|-------------|
-| `dosu review context <thread-id>` | Get review context (type: messages/topic/document) |
-| `dosu review approve <page-version-id>` | Approve a document version |
-| `dosu review reject <page-version-id>` | Reject a document version |
-| `dosu review revert <page-version-id>` | Revert to pending review |
+| `dosu review list` | List pending review items (doc versions + draft messages). Columns: ID, Kind, Title, Source, Status, Created. Use `--json` and key off `origin`/`kind` |
+| `dosu review diff <page-version-id>` | Show the server-rendered diff for a pending version |
+| `dosu review edit <page-version-id>` | Edit a pending version in place. Body: `--body <md>` or `--body-file <path>`; also `--title` |
+| `dosu review context <thread-id>` | Get review context for a thread (type, page IDs, Sync PR URL) |
+| `dosu review approve <id> --confirm` | Approve a pending item. Prints the diff first; `--confirm` is **required to apply** (agents/non-TTY never get the interactive prompt) |
+| `dosu review reject <id> --confirm` | Reject a pending item. Prints the diff first; `--confirm` required to apply |
+| `dosu review revert <id>` | Send an already-decided item back to pending |
+
+`Source` is the humanized `origin`: `User created`/`User updated` (`manual_update`), `AI generated` (`llm_generated`), `Synced from source` (`sync_upstream`), `Created via API` (`api_update`).
 
 ## AI Suggestions
 
