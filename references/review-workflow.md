@@ -8,8 +8,9 @@ source, or API-created) and **draft messages**, all surfaced through the same
 `dosu review` commands. Items are keyed on a single `page-version-id` so
 `list` → `diff` → `edit` → `approve`/`reject` all share one ID.
 
-> The queue caps at the 50 most recent pending items. If it's full, clear some
-> before assuming you've seen everything.
+> `list` returns only the most recent pending items (server-capped, currently
+> 50) and does not flag truncation. If the queue is large, don't assume `list`
+> shows everything.
 
 ## Scope tool access for a review session
 
@@ -45,11 +46,12 @@ dosu review revert <page-version-id> --json
 
 ### `--confirm` is mandatory for agents
 
-`approve` and `reject` print the diff, then ask for interactive confirmation.
-Agents run non-interactively (no TTY), so they get **no prompt** — without
-`--confirm` the command just prints the diff and aborts with "Re-run with
-`--confirm` to apply". Pass `--confirm` only after the user has approved that
-specific item.
+`approve` and `reject` only prompt interactively in a TTY *without* `--json`.
+The skill always passes `--json`, which suppresses both the diff preview and
+the prompt — so without `--confirm` the command changes nothing and returns
+`{ "applied": false, "confirmRequired": true }`. Run `dosu review diff <id>` to
+see the change, then pass `--confirm` to apply — only after the user has
+approved that specific item.
 
 ## Reading the `Source` column
 
