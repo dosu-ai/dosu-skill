@@ -29,6 +29,16 @@ All commands support `--json` for structured output and `--help` for detailed us
 | `dosu knowledge search <query>` | Semantic search across all documents |
 | `dosu knowledge list` | Show knowledge store info for current deployment |
 
+## Codebase Audit
+
+| Command | Description |
+|---------|-------------|
+| `dosu audit` | Read `.dosu/audit.json`, interactively pick docs, fire generation (opens a PR) |
+| `dosu audit --tasks <ids> --json` | Non-interactive: fire exactly these task ids (agent-driven path) |
+| `dosu audit --list-tasks --json` | List the doc-generation capabilities (valid task ids) — no repo or findings needed |
+| `dosu audit --yes` | Skip the prompt and fire all suggested items |
+| `dosu audit --findings <path>` | Use a findings file other than `.dosu/audit.json` |
+
 ## Document Management
 
 | Command | Description |
