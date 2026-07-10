@@ -44,12 +44,15 @@ asks to set up / refresh their agent docs, README, architecture doc, or dependen
 ## Use Dosu MCP for org knowledge
 
 Before finalizing recommendations, use the Dosu MCP tools to pull organization knowledge that
-should inform the docs (architecture decisions, naming, conventions, prior docs):
+should inform the docs (architecture decisions, naming, conventions, prior docs). The exposed
+tool set depends on the connection — always use what's actually listed:
 
-1. `init_knowledge` — always call first to get task-relevant context from the knowledge base.
-2. `search_documentation` / `ask` — check whether the org already documents the architecture,
-   dependencies, or agent conventions elsewhere. If it does, factor that into `status`/`rationale`
-   (e.g. an existing architecture doc in Dosu may mean a repo `architecture.md` should mirror it).
+1. Read first: call `read_knowledge` when listed (or `init_knowledge` on older connections) to
+   get task-relevant context from the knowledge base.
+2. Go deeper with whichever search/ask tools the server exposes — check whether the org already
+   documents the architecture, dependencies, or agent conventions elsewhere. If it does, factor
+   that into `status`/`rationale` (e.g. an existing architecture doc in Dosu may mean a repo
+   `architecture.md` should mirror it).
 
 If no Dosu deployment is connected (only public-library tools are available), skip the MCP step
 and rely on repo evidence alone; note in the `rationale` that org knowledge wasn't consulted.

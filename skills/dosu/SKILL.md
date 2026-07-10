@@ -38,7 +38,7 @@ dosu --version
 
 After the user picks one and confirms, run that exact command, then re-run `dosu --version` to verify before continuing.
 
-Do NOT use `npx @dosu/cli` as a workaround — it runs the CLI once but does **not** install the `dosu` command. The skill's commands (`dosu ask`, `dosu docs`, etc.) require `dosu` to be on the PATH.
+**`npx` works without installing.** If `dosu` is not on the PATH but Node is available, every command in this skill can be run as `npx -y @dosu/cli <command>` instead of `dosu <command>` (e.g. `npx -y @dosu/cli audit --json`). Check with `npx -y @dosu/cli --version`, and if it works, substitute that prefix for `dosu` throughout the session — no install question needed. Only fall back to the install question above when neither `dosu` nor `npx` is usable. Note `npx` does not put a `dosu` command on the PATH; mention the persistent install options once so the user can adopt one later.
 
 Do NOT pre-emptively run `which dosu`, `npm ls -g`, `brew list`, `ls /usr/local/bin/dosu`, etc. — `dosu --version` is the only check you need.
 
@@ -268,10 +268,48 @@ High level:
 
 1. Identify the repo (`git config --get remote.origin.url` → `owner/name`).
 2. Inspect the working tree for each of the four doc types (exists? stale? enough structure?).
-3. Use the Dosu MCP tools (`init_knowledge`, then `ask` / `search_documentation`) to factor in org
-   knowledge before deciding.
+3. Use the Dosu MCP knowledge tools to factor in org knowledge before deciding — call whichever
+   read tool the server lists (`read_knowledge`, or `init_knowledge` on older connections), then
+   any deeper search tools it exposes. If no deployment is connected, skip this step and note it
+   in the `rationale`.
 4. Write `.dosu/audit.json` (one entry per doc type assessed). Gate `architecture.md` strictly —
    only recommend it when the repo is structured enough to warrant one.
+
+### The four tasks and the findings format
+
+These four `task` ids are the only valid values — they map to backend capabilities
+(`dosu audit --list-tasks --json` prints the live list):
+
+| `task` | `type` | `file` | Recommend when |
+|---|---|---|---|
+| `generate-agents-md` | `agents` | `AGENTS.md` | Missing, or stale/thin vs. the repo's commands and conventions. |
+| `refresh-readme` | `readme` | `README.md` | Present but **outdated** with concrete evidence. |
+| `generate-architecture-md` | `architecture` | `architecture.md` | **Missing AND** the repo has real structure (multiple modules, clear layering). |
+| `generate-deps-md` | `deps` | `deps.md` | Missing, or out of sync with the dependency manifests. |
+
+`.dosu/audit.json` shape (`version` is always `1`; one `items` entry per type assessed, including
+`can_help: false` ones):
+
+```json
+{
+  "version": 1,
+  "generated_at": "<ISO 8601>",
+  "repo": { "remote": "<origin URL verbatim>", "slug": "<owner/name>" },
+  "items": [
+    {
+      "task": "generate-agents-md",
+      "type": "agents",
+      "file": "AGENTS.md",
+      "status": "missing | outdated | present_ok",
+      "action": "create | update | skip",
+      "can_help": true,
+      "confidence": "high | medium | low",
+      "rationale": "Specific, evidence-citing reason — forwarded to Dosu cloud as generation guidance.",
+      "evidence": ["repo-relative/paths.ts", "optionally/with:42"]
+    }
+  ]
+}
+```
 
 ### Handing off to generation — two paths
 
@@ -295,7 +333,10 @@ yourself (no chat surface).
 In both cases the repo must be connected to Dosu (done during `dosu setup`); `dosu audit` enforces
 that before firing.
 
-Follow the full procedure and output format in the reference files below before running the audit.
+The section above is self-sufficient. When the reference files below are present, also read
+[references/audit.md](references/audit.md) and
+[references/audit-findings-schema.md](references/audit-findings-schema.md) for the full procedure
+and field-by-field schema; if they're missing from this install, proceed with the tables above.
 
 ## Agent guidelines
 
@@ -316,7 +357,7 @@ When acting as an agent, always pass `--json` to get structured output. Parse th
 
 ### Error handling
 
-- **`command not found: dosu`** → CLI is not installed. Go back to Prerequisites § Step 0 and ask the user to pick an install method. Do not retry `dosu` until install is verified with `dosu --version`.
+- **`command not found: dosu`** → No global install. Try `npx -y @dosu/cli --version`; if that works, use the `npx -y @dosu/cli` prefix for all commands this session. Otherwise go back to Prerequisites § Step 0 and ask the user to pick an install method; do not retry `dosu` until install is verified with `dosu --version`.
 - **"Not logged in"** → Run `dosu login` (needed for all tRPC commands and hybrid JWT+API-key commands). For agent-driven flows, use `dosu login --request --json` instead and follow the returned `agent_next_steps`.
 - **"API key not configured"** → Run `dosu setup` (needed for `ask`, `docs generate`, `docs auto-tag`, `docs publish`). For agent flows, use `dosu setup --agent --tool <id>`.
 - **"Missing space/org config"** → Run `dosu setup` to select a deployment
