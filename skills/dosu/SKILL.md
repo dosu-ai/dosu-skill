@@ -6,7 +6,7 @@ description: 'Guide for using the Dosu CLI to set up Dosu for coding agents, con
 # Using the Dosu CLI
 
 The Dosu CLI (`dosu`) gives agents and users full access to the Dosu platform from the terminal.
-Every command supports `--json` for structured output and `--help` for parameter details.
+Commands that expose `--json` support structured output; use `--help` for command-specific options.
 
 ## When to use this skill
 
@@ -340,9 +340,9 @@ and field-by-field schema; if they're missing from this install, proceed with th
 
 ## Agent guidelines
 
-### Always use `--json`
+### Prefer structured output
 
-When acting as an agent, always pass `--json` to get structured output. Parse the JSON to extract the data you need. Without `--json`, output is human-formatted with ANSI colors and table formatting that's harder to parse.
+When acting as an agent, pass `--json` when the command exposes it and parse the returned JSON. Some commands do not offer the flag, and `dosu setup --agent` emits NDJSON automatically; follow the command examples in this skill and use `--help` when unsure.
 
 ### Choosing the right command
 
