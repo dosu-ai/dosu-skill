@@ -23,7 +23,7 @@ Standalone:
 
 ```bash
 npx @dosu/cli skill install
-# equivalent: npx skills add dosu-ai/dosu-skill -g -s dosu -s log-to-dosu-knowledge -y
+# equivalent: npx skills add dosu-ai/dosu-skill -g -s "*" -y
 ```
 
 Confirm the agent can call `whoami` and sees `write_knowledge`.

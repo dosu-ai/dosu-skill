@@ -15,14 +15,12 @@ This installs **both** skills from this repo:
 | Skill | Purpose |
 |-------|---------|
 | `dosu` | Use the Dosu platform (ask, docs, threads, …) |
-| `log-to-dosu-knowledge` | Mine local agent logs → `write_knowledge` → “Saved N notes” |
+| `log-to-dosu-knowledge` | Mine local agent logs → `write_knowledge` → cached notes + expected savings |
 
 ### Via Skills CLI
 
 ```bash
-npx skills add dosu-ai/dosu-skill
-# or select explicitly:
-npx skills add dosu-ai/dosu-skill -s dosu -s log-to-dosu-knowledge -y
+npx skills add dosu-ai/dosu-skill -g -s "*" -y
 ```
 
 ## What it does
