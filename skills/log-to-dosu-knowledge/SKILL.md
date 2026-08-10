@@ -21,7 +21,7 @@ description: >-
 **Dry-run:** same extraction, but **do not** call `write_knowledge`. Output is
 only the list of calls you *would* make.
 
-Works for any company with Dosu MCP — not only the Dosu monorepo.
+Requires a Dosu MCP connection with `write_knowledge`.
 
 - Setup: [references/customer-setup.md](references/customer-setup.md)
 - What counts as a learning: [references/write-criteria.md](references/write-criteria.md)

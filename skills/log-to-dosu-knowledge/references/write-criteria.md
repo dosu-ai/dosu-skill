@@ -1,8 +1,7 @@
 # write_knowledge criteria (for log extraction)
 
 Use these rules when deciding whether a fact from an agent transcript should be
-saved to the **connected Dosu deployment** (any company with Dosu MCP — not only
-Dosu internal).
+saved to the **connected Dosu deployment**.
 
 **Default skill mode auto-writes** notes that pass this filter. Be selective —
 junk notes defeat the one-shot UX — but do not require a human approval table

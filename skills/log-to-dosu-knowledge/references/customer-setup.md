@@ -1,4 +1,4 @@
-# Customer setup (any company with Dosu MCP)
+# Setup (Dosu MCP required)
 
 This skill mines **local** Cursor / Claude Code / Codex histories and writes
 durable notes to the team's Dosu deployment via `write_knowledge`. Logs never
@@ -70,46 +70,3 @@ their self-hosted git host.
 
 `dosu setup` / `dosu skill install` → engineer says “mine my logs” → notes land
 in their Branch Notes → short “Saved N notes” summary.
-
-## 6. Shipping this skill via `dosu skill install` (maintainers)
-
-`dosu skill install` pulls from [`dosu-ai/dosu-skill`](https://github.com/dosu-ai/dosu-skill)
-via [`dosu-ai/dosu-cli`](https://github.com/dosu-ai/dosu-cli) (`src/commands/skill.ts`).
-Today the CLI hardcodes `-s dosu` only. To ship `log-to-dosu-knowledge`:
-
-### A. `dosu-ai/dosu-skill`
-
-Add the package next to `skills/dosu/`:
-
-```text
-skills/log-to-dosu-knowledge/
-  SKILL.md
-  scripts/
-  references/
-```
-
-Source of truth while developing: this monorepo path
-`.claude/skills/log-to-dosu-knowledge/`. Copy/sync into `dosu-skill` for release.
-
-Update that repo’s README “What it does” to mention log mining.
-
-### B. `dosu-ai/dosu-cli`
-
-In `src/commands/skill.ts`:
-
-```ts
-const SKILL_NAMES = ["dosu", "log-to-dosu-knowledge"] as const;
-// install/update:  npx skills add … -s dosu -s log-to-dosu-knowledge -y
-// remove:          npx skills remove -g -s dosu -s log-to-dosu-knowledge -y
-```
-
-Keep `PRIMARY_SKILL_NAME = "dosu"` for setup UI path reporting
-(`skillInstallTargetForProvider`). Update `skill.test.ts` expectations
-accordingly (`-s dosu -s log-to-dosu-knowledge`).
-
-### C. Order
-
-1. Merge skill content into `dosu-skill` first (otherwise CLI install fails looking for a missing skill name).
-2. Merge CLI change so `setup` / `skill install` / `skill update` pull both.
-3. Customers on an older CLI can still run:
-   `npx skills add dosu-ai/dosu-skill -g -s log-to-dosu-knowledge -y`
