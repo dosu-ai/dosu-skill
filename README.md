@@ -1,6 +1,6 @@
 # Dosu Skill
 
-Agent skill for the [Dosu](https://dosu.dev) platform — gives AI coding agents (Claude Code, Cursor, Codex, etc.) full access to your knowledge base, documentation, threads, and team management.
+Agent skills for the [Dosu](https://dosu.dev) platform — gives AI coding agents (Claude Code, Cursor, Codex, etc.) full access to your knowledge base, documentation, threads, and team management.
 
 ## Install
 
@@ -10,10 +10,19 @@ Agent skill for the [Dosu](https://dosu.dev) platform — gives AI coding agents
 npx @dosu/cli skill install
 ```
 
+This installs **both** skills from this repo:
+
+| Skill | Purpose |
+|-------|---------|
+| `dosu` | Use the Dosu platform (ask, docs, threads, …) |
+| `log-to-dosu-knowledge` | Mine local agent logs → `write_knowledge` → “Saved N notes” |
+
 ### Via Skills CLI
 
 ```bash
 npx skills add dosu-ai/dosu-skill
+# or select explicitly:
+npx skills add dosu-ai/dosu-skill -s dosu -s log-to-dosu-knowledge -y
 ```
 
 ## What it does
@@ -26,6 +35,7 @@ Once installed, agents can:
 - **Import docs** from GitHub, GitLab, Confluence, Notion, Coda (`dosu docs import`)
 - **Check analytics** and team activity (`dosu analytics`)
 - **Manage team members** and integrations (`dosu members`, `dosu integrations`)
+- **Mine local Cursor / Claude Code / Codex histories** into Branch Notes (`log-to-dosu-knowledge`)
 
 ## Prerequisites
 
