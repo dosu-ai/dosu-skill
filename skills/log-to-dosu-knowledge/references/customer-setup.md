@@ -17,7 +17,7 @@ Setup connects Dosu MCP and runs `dosu skill install`, which should install
 | Skill | Purpose |
 |-------|---------|
 | `dosu` | Use the Dosu platform (ask, docs, threads, …) |
-| `log-to-dosu-knowledge` | Mine agent logs → `write_knowledge` → “Saved N notes” |
+| `log-to-dosu-knowledge` | Mine agent logs → `write_knowledge` → cached notes + expected savings |
 
 Standalone:
 
@@ -41,14 +41,18 @@ In the agent chat (repo open, MCP connected):
 
 > Mine my agent logs into Dosu.
 
-The agent reads local logs, extracts durable learnings, and calls
-`write_knowledge` for each. Expected reply: **Saved N notes to Dosu** + titles.
+The agent reads local logs, extracts durable learnings, calls `write_knowledge`
+for each, then replies with **what was cached** and **expected token savings**
+(analytics-style: rediscovery/generation cost reused on each future read).
 
 | Ask | Effect |
 |-----|--------|
-| "dry-run" / "don't write" | Same extraction; print the `write_knowledge` payloads (title/content/repo/branch) without writing |
+| _(default)_ | Mine the **50 most recent** sessions |
+| "last N days" / "past month" | All sessions in that window (`--days N`) |
+| "full audit" / "everything" | Every discovered parent session (`--full`) |
+| "dry-run" / "don't write" | Same extraction; print the `write_knowledge` payloads without writing |
 | "HTML report" / "PDF" | Optional shareable HTML of those payloads |
-| "token savings" | Counterfactual eval (opt-in) |
+| "detailed token report" | Full baseline-vs-read counterfactual (`compare_tokens.py`) |
 
 ## 3. Repo / branch for writes
 
@@ -69,4 +73,4 @@ their self-hosted git host.
 ## 5. Success
 
 `dosu setup` / `dosu skill install` → engineer says “mine my logs” → notes land
-in their Branch Notes → short “Saved N notes” summary.
+in their Branch Notes → short reply: cached titles + expected savings.

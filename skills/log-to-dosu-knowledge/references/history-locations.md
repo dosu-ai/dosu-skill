@@ -50,8 +50,14 @@ If `projects/` is missing, Claude Code has not written sessions on this machine 
 Set `SKILL_DIR` to the installed skill directory (see SKILL.md), then:
 
 ```bash
-# All hosts, current project cwd
+# Default: 50 most recent parent sessions (current project cwd)
 python3 "$SKILL_DIR/scripts/parse_agent_logs.py"
+
+# Past 30 days (all sessions in window)
+python3 "$SKILL_DIR/scripts/parse_agent_logs.py" --days 30
+
+# Full audit
+python3 "$SKILL_DIR/scripts/parse_agent_logs.py" --full
 
 # Codex only
 python3 "$SKILL_DIR/scripts/parse_agent_logs.py" --sources codex

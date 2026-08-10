@@ -7,8 +7,11 @@ like they contain durable knowledge worth writing to Dosu.
 
 Usage:
   python3 parse_agent_logs.py
-  python3 parse_agent_logs.py --sources cursor,claude,codex
-  python3 parse_agent_logs.py --sources codex --limit 20 --out /tmp/inventory.json
+  python3 parse_agent_logs.py --out /tmp/inventory.json
+  python3 parse_agent_logs.py --days 30          # all sessions in past 30 days
+  python3 parse_agent_logs.py --full             # full audit (no cap)
+  python3 parse_agent_logs.py --limit 20         # N most recent
+  python3 parse_agent_logs.py --sources codex
   python3 parse_agent_logs.py --dir ~/.cursor/projects/<proj>/agent-transcripts
   python3 parse_agent_logs.py --digest <id>
   python3 parse_agent_logs.py --self-test
@@ -25,7 +28,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -1148,6 +1151,50 @@ def parse_sources_arg(raw: str) -> list[Source]:
     return out or list(ALL_SOURCES)
 
 
+
+def resolve_inventory_scope(
+    *,
+    full: bool,
+    days: int | None,
+    limit: int | None,
+) -> dict[str, Any]:
+    """Resolve inventory window.
+
+    Defaults to the 50 most recent sessions. `--days N` keeps every session in
+    that window (no count cap unless `--limit` is also set). `--full` is a full
+    audit with no time or count filter.
+    """
+    if full and days is not None:
+        raise SystemExit("Use either --full or --days, not both")
+    if full:
+        return {
+            "mode": "full",
+            "limit": None,
+            "days": None,
+            "cutoff_mtime": None,
+        }
+    if days is not None:
+        if days <= 0:
+            raise SystemExit("--days must be a positive integer")
+        cutoff = datetime.now(tz=UTC) - timedelta(days=days)
+        return {
+            "mode": "days",
+            "limit": limit if limit is not None and limit > 0 else None,
+            "days": days,
+            "cutoff_mtime": cutoff,
+        }
+    # Default / explicit --limit: most recent N by mtime (default 50).
+    n = 50 if limit is None else limit
+    if n <= 0:
+        raise SystemExit("--limit must be a positive integer (or omit for default 50)")
+    return {
+        "mode": "recent",
+        "limit": n,
+        "days": None,
+        "cutoff_mtime": None,
+    }
+
+
 def run_self_test() -> int:
     """Tiny fixtures for cursor + claude + codex parsers."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1318,6 +1365,20 @@ def run_self_test() -> int:
         assert detect_source(cursor) == "cursor"
         assert detect_source(claude) == "claude"
         assert detect_source(codex) == "codex"
+        # Scope resolution
+        s_default = resolve_inventory_scope(full=False, days=None, limit=None)
+        assert s_default["mode"] == "recent" and s_default["limit"] == 50
+        s_days = resolve_inventory_scope(full=False, days=30, limit=None)
+        assert s_days["mode"] == "days" and s_days["limit"] is None
+        assert s_days["cutoff_mtime"] is not None
+        s_full = resolve_inventory_scope(full=True, days=None, limit=None)
+        assert s_full["mode"] == "full" and s_full["limit"] is None
+        try:
+            resolve_inventory_scope(full=True, days=7, limit=None)
+            raise AssertionError("expected --full/--days conflict")
+        except SystemExit:
+            pass
+
         print("self-test OK")
         print(
             json.dumps(
@@ -1358,7 +1419,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--all-projects", action="store_true", help="do not scope to --cwd"
     )
-    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="max most-recent sessions by mtime (default: 50; ignored by --full "
+        "unless combined with --days)",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="only sessions with mtime in the past N days (no count cap unless "
+        "--limit is also set)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="full audit: every discovered parent session (no days/limit filter)",
+    )
     parser.add_argument("--min-tokens", type=int, default=0)
     parser.add_argument("--include-subagents", action="store_true")
     parser.add_argument("--out", type=Path)
@@ -1433,18 +1512,24 @@ def main(argv: list[str] | None = None) -> int:
                 )
         return 0
 
-    # Cap parse work per source so a busy Cursor dir cannot starve Claude/Codex
-    # when --limit is small. Then rank globally and trim to --limit.
-    per_source_cap = max(args.limit, 10)
+    scope = resolve_inventory_scope(
+        full=args.full, days=args.days, limit=args.limit
+    )
+    cutoff: datetime | None = scope["cutoff_mtime"]
+    limit: int | None = scope["limit"]
+
+    # refs are newest-first by mtime. Apply time window, then optional count cap
+    # on most-recent sessions, then parse + rank by candidate score.
     selected: list[SessionRef] = []
-    per_source_counts: Counter[str] = Counter()
     for ref in refs:
         if ref.is_subagent and not args.include_subagents:
             continue
-        if per_source_counts[ref.source] >= per_source_cap:
+        mtime = datetime.fromtimestamp(ref.path.stat().st_mtime, tz=UTC)
+        if cutoff is not None and mtime < cutoff:
             continue
         selected.append(ref)
-        per_source_counts[ref.source] += 1
+    if limit is not None:
+        selected = selected[:limit]
 
     summaries: list[TranscriptSummary] = []
     for ref in selected:
@@ -1457,7 +1542,7 @@ def main(argv: list[str] | None = None) -> int:
         summaries,
         key=lambda x: (x.candidate_score, effective_tokens(x)),
         reverse=True,
-    )[: args.limit]
+    )
     total_est = sum(s.estimated_tokens for s in ranked)
     total_eff = sum(effective_tokens(s) for s in ranked)
     write_gaps = [
@@ -1468,6 +1553,14 @@ def main(argv: list[str] | None = None) -> int:
 
     inventory = {
         "generated_at": datetime.now(tz=UTC).isoformat(),
+        "scope": {
+            "mode": scope["mode"],
+            "limit": scope["limit"],
+            "days": scope["days"],
+            "cutoff_mtime": (
+                scope["cutoff_mtime"].isoformat() if scope["cutoff_mtime"] else None
+            ),
+        },
         "sources_requested": sources,
         "cwd": str(cwd) if cwd else None,
         "chars_per_token": CHARS_PER_TOKEN,
@@ -1500,7 +1593,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(inventory, indent=2, ensure_ascii=False))
     else:
-        print(f"sources: {', '.join(sources)}  cwd: {cwd}")
+        scope_bits = [f"mode={scope['mode']}"]
+        if scope["days"] is not None:
+            scope_bits.append(f"days={scope['days']}")
+        if scope["limit"] is not None:
+            scope_bits.append(f"limit={scope['limit']}")
+        print(f"sources: {', '.join(sources)}  cwd: {cwd}  ({', '.join(scope_bits)})")
         print(
             f"transcripts: {len(summaries)}  effective_tokens: {total_eff}  "
             f"estimated_tokens: {total_est}  by_source: {dict(by_source)}  "
