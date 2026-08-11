@@ -17,13 +17,16 @@ description: >-
 
 1. Read local agent logs  
 2. Decide durable learnings (not the user’s prompt — the *answer/gotcha* found)  
-3. Call `write_knowledge` for each  
-4. Tell the user **what was cached** and **expected token savings**
+3. Write each under a synthetic `dosu/log-backfill/<UTC-timestamp>` branch  
+   (server auto-enqueues notes-upflow for that prefix — same path as a PR merge)  
+4. Tell the user **what was cached**, **expected token savings**, and the backfill branch
 
 **Dry-run:** same extraction, but **do not** call `write_knowledge`. Output is
-only the list of calls you *would* make.
+only the list of calls you *would* make (with the synthetic branch filled in).
 
-Requires a Dosu MCP connection with `write_knowledge`.
+Requires a Dosu MCP connection with `write_knowledge`. Writes must use
+`dosu/log-backfill/<timestamp>` so they auto-promote; do **not** fall back to
+the current checkout branch (those notes stay stranded until a real PR merges).
 
 - Setup: [references/customer-setup.md](references/customer-setup.md)
 - What counts as a learning: [references/write-criteria.md](references/write-criteria.md)
@@ -38,7 +41,7 @@ Each learning is one MCP call. Args are exactly:
 | `title` | Noun-phrase topic (`Slack PostgREST 1000-row channel picker cap`) |
 | `content` | Self-contained fact a future agent needs |
 | `repo` | Literal `git remote get-url origin` |
-| `branch` | From the log when known, else current branch |
+| `branch` | Synthetic `dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS>` for the whole run |
 | `tags` | Optional, e.g. `["from-agent-log", "cursor"]` |
 
 **Wrong (never do this):** using the user’s first message as `title` / treating
@@ -52,18 +55,18 @@ content: slackChannel.getAll used an unbounded PostgREST select; hosted
          PostgREST silently returns ≤1000 rows so large workspaces miss
          channels that exist in slack.channel. Page the query.
 repo:    git@github.com:acme/api.git
-branch:  main
+branch:  dosu/log-backfill/20260810-220015
 ```
 
 ## Workflow
 
 ```
 Progress:
-- [ ] 0. whoami + REPO/BRANCH/SKILL_DIR
+- [ ] 0. whoami + REPO/BACKFILL_BRANCH/SKILL_DIR
 - [ ] 1. Inventory (find sessions worth mining — internal)
 - [ ] 2. Digest those sessions
 - [ ] 3. Build the write_knowledge payload list (+ rediscovery token estimate)
-- [ ] 4a. Default: write → reply with cached titles + expected savings
+- [ ] 4a. Default: write on BACKFILL_BRANCH (auto-promotes) → reply
 - [ ] 4b. Dry-run: print the payload list → stop (no writes, no finalize)
 ```
 
@@ -73,11 +76,13 @@ Progress:
 SKILL_DIR="$(find .claude/skills .cursor/skills .agents/skills \
   -type d -name 'log-to-dosu-knowledge' 2>/dev/null | head -1)"
 REPO="$(git remote get-url origin)"
-BRANCH="$(git branch --show-current)"
+BACKFILL_BRANCH="dosu/log-backfill/$(date -u +%Y%m%d-%H%M%S)"
 test -f "$SKILL_DIR/scripts/parse_agent_logs.py"
 ```
 
-Call `whoami`. One line to the user which deployment will receive notes.
+Call `whoami`. Confirm `write_knowledge` is available. One line to the user
+which deployment will receive notes and the `BACKFILL_BRANCH` for this run.
+Never write log-backfill notes to the checkout branch.
 
 ### Step 1 — Inventory (internal)
 
@@ -121,12 +126,15 @@ append a payload:
   "title": "…",
   "content": "…",
   "repo": "<$REPO>",
-  "branch": "<$BRANCH or from log>",
+  "branch": "<$BACKFILL_BRANCH>",
   "tags": ["from-agent-log", "cursor"],
   "transcript_id": "<source session id>",
   "approx_rediscovery_tokens": 12000
 }
 ```
+
+Use the same `BACKFILL_BRANCH` for every candidate in the run. Do **not** use
+the checkout branch or a per-log branch name.
 
 `approx_rediscovery_tokens` is the analytics analogue of
 `page_version.generation_tokens`: tokens spent rediscovering this fact in the
@@ -148,13 +156,15 @@ one shape.
 ### Step 4a — Default: write + savings
 
 For each payload, call MCP `write_knowledge` with `title` / `content` / `repo` /
-`branch` / `tags` (omit helper fields like `approx_rediscovery_tokens`).
+`branch` / `tags` (omit helper fields like `approx_rediscovery_tokens`). Every
+write must use `BACKFILL_BRANCH`. The server auto-enqueues notes-upflow for
+`dosu/log-backfill/*` (same step as a PR merge) — no separate promote call.
 
 If MCP write is unavailable:
 
 ```bash
 python3 "$SKILL_DIR/scripts/pending_knowledge.py" append \
-  --repo "$REPO" --branch "$BRANCH" \
+  --repo "$REPO" --branch "$BACKFILL_BRANCH" \
   --title "…" --content "…" \
   --tags from-agent-log,pending-sync
 ```
@@ -166,7 +176,8 @@ python3 "$SKILL_DIR/scripts/summarize_savings.py" \
   --candidates /tmp/dosu-log-candidates.json
 ```
 
-**That stdout is the default reply.** Shape:
+**That stdout is the default reply**, plus one line that notes were written on
+`BACKFILL_BRANCH` and entered the candidate-topic pipeline. Shape:
 
 ```
 Cached N notes:
@@ -175,6 +186,8 @@ Cached N notes:
 
 Expected savings: ~Y tokens per future agent read
 (same model as analytics: rediscovery/generation cost reused on each hit)
+
+Wrote on dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS> (auto-promoted into the candidate-topic pipeline).
 ```
 
 Do **not** stop at “Saved N notes” without the savings line.
@@ -183,7 +196,8 @@ Call `finalize_session_knowledge` once with write receipt ids if that tool exist
 
 ### Step 4b — Dry-run (when user asks)
 
-**Do not** call `write_knowledge`. Reply with the payload list, e.g.:
+**Do not** call `write_knowledge`. Still set `BACKFILL_BRANCH` and include it on
+every listed payload. Reply with the payload list, e.g.:
 
 ```
 Dry-run — would call write_knowledge N times:
@@ -214,14 +228,16 @@ these were written).
 python3 "$SKILL_DIR/scripts/generate_report.py" \
   --inventory /tmp/dosu-log-inventory.json \
   --candidates /tmp/dosu-log-candidates.json \
-  --org-name "…" --repo "$REPO" --branch "$BRANCH" \
+  --org-name "…" --repo "$REPO" --branch "$BACKFILL_BRANCH" \
   --out /tmp/dosu-knowledge-report.html --open
 ```
 
 ## Guardrails
 
-- Default **writes** and always includes **expected token savings**.
-- Dry-run only when asked.
+- Default **writes** on `dosu/log-backfill/*` (server auto-promotes) and always
+  includes **expected token savings**.
+- Never write log-backfill notes to the current checkout branch.
+- Dry-run only when asked (no write).
 - Never write secrets / PII / raw log dumps.
 - One learning per `write_knowledge` call; keep notes lean.
 - User-facing output is always about **notes** (written or proposed) + savings,
@@ -229,5 +245,5 @@ python3 "$SKILL_DIR/scripts/generate_report.py" \
 
 ## Quick examples
 
-- "Mine my agent logs into Dosu." → write + cached titles + expected savings.
-- "Dry-run log to dosu knowledge." → list of `write_knowledge` payloads only.
+- "Mine my agent logs into Dosu." → write on backfill branch (auto-promotes) + cached titles + expected savings.
+- "Dry-run log to dosu knowledge." → list of `write_knowledge` payloads (synthetic branch) only.

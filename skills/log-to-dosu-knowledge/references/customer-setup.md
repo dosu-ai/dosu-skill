@@ -28,6 +28,8 @@ npx @dosu/cli skill install
 
 Confirm the agent can call `whoami` and sees `write_knowledge`.
 OSS-only connections (no deployment) cannot write team knowledge.
+Log-backfill writes use `dosu/log-backfill/<timestamp>`; the server auto-enqueues
+notes-upflow for that branch prefix (requires a backend that supports it).
 
 Manual MCP URL shape:
 
@@ -41,8 +43,10 @@ In the agent chat (repo open, MCP connected):
 
 > Mine my agent logs into Dosu.
 
-The agent reads local logs, extracts durable learnings, calls `write_knowledge`
-for each, then replies with **what was cached** and **expected token savings**
+The agent reads local logs, extracts durable learnings, writes each note under
+a synthetic `dosu/log-backfill/<UTC-timestamp>` branch (server auto-promotes into
+the candidate-topic pipeline — same upflow path as a PR merge), then replies with
+**what was cached**, **expected token savings**, and the backfill branch
 (analytics-style: rediscovery/generation cost reused on each future read).
 
 | Ask | Effect |
@@ -50,7 +54,7 @@ for each, then replies with **what was cached** and **expected token savings**
 | _(default)_ | Mine the **50 most recent** sessions |
 | "last N days" / "past month" | All sessions in that window (`--days N`) |
 | "full audit" / "everything" | Every discovered parent session (`--full`) |
-| "dry-run" / "don't write" | Same extraction; print the `write_knowledge` payloads without writing |
+| "dry-run" / "don't write" | Same extraction; print the `write_knowledge` payloads (synthetic branch) without writing |
 | "HTML report" / "PDF" | Optional shareable HTML of those payloads |
 | "detailed token report" | Full baseline-vs-read counterfactual (`compare_tokens.py`) |
 
@@ -59,7 +63,11 @@ for each, then replies with **what was cached** and **expected token savings**
 | Field | Value |
 |-------|--------|
 | `repo` | Literal `git remote get-url origin` |
-| `branch` | `git branch --show-current` (or branch from the log) |
+| `branch` | Synthetic `dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS>` for the whole run |
+
+Writes under `dosu/log-backfill/*` auto-enqueue notes-upflow, so notes enter the
+candidate-topic pipeline without needing a real PR merge. Works for any repo
+connected to the Library (not just dosu-ai/dosu).
 
 Host must be github.com / gitlab.com / dev.azure.com unless Dosu has allowlisted
 their self-hosted git host.
@@ -73,4 +81,5 @@ their self-hosted git host.
 ## 5. Success
 
 `dosu setup` / `dosu skill install` → engineer says “mine my logs” → notes land
-in their Branch Notes → short reply: cached titles + expected savings.
+on a synthetic backfill branch and auto-enter the candidate-topic pipeline →
+short reply: cached titles + expected savings + backfill branch name.
