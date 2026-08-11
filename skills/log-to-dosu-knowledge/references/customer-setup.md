@@ -41,7 +41,9 @@ https://api.dosu.dev/v1/mcp/deployments/<deployment-id>
 
 In the agent chat (repo open, MCP connected):
 
-> Mine my agent logs into Dosu.
+> Please bootstrap my knowledge with Dosu.
+>
+> (also: “Mine my agent logs into Dosu.”)
 
 The agent reads local logs, extracts durable learnings, writes each note under
 a synthetic `dosu/log-backfill/<UTC-timestamp>` branch (server auto-promotes into
@@ -51,7 +53,8 @@ the candidate-topic pipeline — same upflow path as a PR merge), then replies w
 
 | Ask | Effect |
 |-----|--------|
-| _(default)_ | Mine the **50 most recent** sessions |
+| “Please bootstrap my knowledge with Dosu” | Default write flow (50 most recent) |
+| _(default)_ / “mine my logs” | Mine the **50 most recent** sessions |
 | "last N days" / "past month" | All sessions in that window (`--days N`) |
 | "full audit" / "everything" | Every discovered parent session (`--full`) |
 | "dry-run" / "don't write" | Same extraction; print the `write_knowledge` payloads (synthetic branch) without writing |
@@ -80,6 +83,6 @@ their self-hosted git host.
 
 ## 5. Success
 
-`dosu setup` / `dosu skill install` → engineer says “mine my logs” → notes land
+`dosu setup` / `dosu skill install` → engineer says “Please bootstrap my knowledge with Dosu” (or “mine my logs”) → notes land
 on a synthetic backfill branch and auto-enter the candidate-topic pipeline →
 short reply: cached titles + expected savings + backfill branch name.

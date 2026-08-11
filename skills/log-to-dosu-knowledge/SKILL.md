@@ -5,7 +5,7 @@ description: >-
   durable learning found. Default auto-writes then reports what was cached and
   expected token savings (analytics-style: rediscovery/generation cost reused on
   each future read). Dry-run lists the exact write_knowledge payloads (title,
-  content, repo, branch) without writing. Use when the user says "log to dosu
+  content, repo, branch) without writing. Use when the user says "Please bootstrap my knowledge with Dosu", "log to dosu
   knowledge", "mine my sessions into Dosu", "backfill branch notes from my agent
   logs", "save my agent logs to Dosu", or wants a one-shot pass over local
   histories.
@@ -245,5 +245,6 @@ python3 "$SKILL_DIR/scripts/generate_report.py" \
 
 ## Quick examples
 
-- "Mine my agent logs into Dosu." → write on backfill branch (auto-promotes) + cached titles + expected savings.
+- "Please bootstrap my knowledge with Dosu." → write on backfill branch (auto-promotes) + cached titles + expected savings.
+- "Mine my agent logs into Dosu." → same default write flow.
 - "Dry-run log to dosu knowledge." → list of `write_knowledge` payloads (synthetic branch) only.
