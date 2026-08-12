@@ -4,7 +4,7 @@ description: >-
   Read Cursor / Claude Code / Codex agent logs and call write_knowledge for each
   durable learning found. Default auto-writes then reports what was cached and
   expected token savings (analytics-style: rediscovery/generation cost reused on
-  each future read). Dry-run lists the exact write_knowledge payloads (title,
+  each future read), and opens the HTML report. Dry-run lists the exact write_knowledge payloads (title,
   content, repo, branch) without writing. Use when the user says "Please bootstrap my knowledge with Dosu",
   "bootstrap agent knowledge", "/bootstrap-agent-knowledge", "log to dosu
   knowledge", "mine my sessions into Dosu", "backfill branch notes from my agent
@@ -20,7 +20,8 @@ description: >-
 2. Decide durable learnings (not the user’s prompt — the *answer/gotcha* found)  
 3. Write each under a synthetic `dosu/log-backfill/<UTC-timestamp>` branch  
    (server auto-enqueues notes-upflow for that prefix — same path as a PR merge)  
-4. Tell the user **what was cached**, **expected token savings**, and the backfill branch
+4. Tell the user **what was cached**, **expected token savings**, and the backfill branch  
+5. Open the HTML report (`generate_report.py --open`)
 
 **Dry-run:** same extraction, but **do not** call `write_knowledge`. Output is
 only the list of calls you *would* make (with the synthetic branch filled in).
@@ -88,7 +89,7 @@ Progress:
 - [ ] 1. Inventory (find sessions worth mining — internal)
 - [ ] 2. Digest those sessions
 - [ ] 3. Build the write_knowledge payload list (+ rediscovery token estimate)
-- [ ] 4a. Default: write on BACKFILL_BRANCH (auto-promotes) → reply
+- [ ] 4a. Default: write on BACKFILL_BRANCH (auto-promotes) → open HTML report → reply
 - [ ] 4b. Dry-run: print the payload list → stop (no writes, no finalize)
 ```
 
@@ -215,6 +216,16 @@ Wrote on dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS> (auto-promoted into the candida
 
 Do **not** stop at “Saved N notes” without the savings line.
 
+Then always open the HTML report (not opt-in):
+
+```bash
+python3 "$SKILL_DIR/scripts/generate_report.py" \
+  --inventory /tmp/dosu-log-inventory.json \
+  --candidates /tmp/dosu-log-candidates.json \
+  --org-name "…" --repo "$REPO" --branch "$BACKFILL_BRANCH" \
+  --out /tmp/dosu-knowledge-report.html --open
+```
+
 Call `finalize_session_knowledge` once with write receipt ids if that tool exists.
 
 ### Step 4b — Dry-run (when user asks)
@@ -244,21 +255,13 @@ these were written).
 
 | User says | Behavior |
 |-----------|----------|
-| "HTML report" / "PDF" | Optional shareable summary (`generate_report.py` + `--candidates`) |
+| "PDF" | Print / Save as PDF from the HTML report already opened |
 | "detailed token report" | Full `compare_tokens.py` counterfactual (baseline vs read) |
-
-```bash
-python3 "$SKILL_DIR/scripts/generate_report.py" \
-  --inventory /tmp/dosu-log-inventory.json \
-  --candidates /tmp/dosu-log-candidates.json \
-  --org-name "…" --repo "$REPO" --branch "$BACKFILL_BRANCH" \
-  --out /tmp/dosu-knowledge-report.html --open
-```
 
 ## Guardrails
 
 - Default **writes** on `dosu/log-backfill/*` (server auto-promotes) and always
-  includes **expected token savings**.
+  includes **expected token savings** and **opens the HTML report**.
 - Never write log-backfill notes to the current checkout branch.
 - Never ask how to attribute notes to branches — always `BACKFILL_BRANCH`.
 - Never invent a scope questionnaire; use the defaults unless the user already
@@ -271,6 +274,6 @@ python3 "$SKILL_DIR/scripts/generate_report.py" \
 
 ## Quick examples
 
-- "Please bootstrap my knowledge with Dosu." → write on backfill branch (auto-promotes) + cached titles + expected savings.
+- "Please bootstrap my knowledge with Dosu." → write on backfill branch (auto-promotes) + cached titles + expected savings + open HTML report.
 - "Mine my agent logs into Dosu." → same default write flow.
 - "Dry-run log to dosu knowledge." → list of `write_knowledge` payloads (synthetic branch) only.
