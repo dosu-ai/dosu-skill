@@ -47,19 +47,20 @@ In the agent chat (repo open, MCP connected):
 
 The agent reads local logs, extracts durable learnings, writes each note under
 a synthetic `dosu/log-backfill/<UTC-timestamp>` branch (server auto-promotes into
-the candidate-topic pipeline — same upflow path as a PR merge), then replies with
-**what was cached**, **expected token savings**, and the backfill branch
-(analytics-style: rediscovery/generation cost reused on each future read).
+the candidate-topic pipeline — same upflow path as a PR merge), opens the HTML
+report (including estimated context savings), then replies with **what was cached**, **expected token savings**, and
+the backfill branch (analytics-style: rediscovery/generation cost reused on each
+future read).
 
 | Ask | Effect |
 |-----|--------|
-| “Please bootstrap my knowledge with Dosu” | Default write flow (50 most recent) |
+| “Please bootstrap my knowledge with Dosu” | Default write flow (50 most recent) + open HTML report with estimated context savings |
 | _(default)_ / “mine my logs” | Mine the **50 most recent** sessions |
 | "last N days" / "past month" | All sessions in that window (`--days N`) |
 | "full audit" / "everything" | Every discovered parent session (`--full`) |
 | "dry-run" / "don't write" | Same extraction; print the `write_knowledge` payloads (synthetic branch) without writing |
-| "HTML report" / "PDF" | Optional shareable HTML of those payloads |
-| "detailed token report" | Full baseline-vs-read counterfactual (`compare_tokens.py`) |
+| "PDF" | Print / Save as PDF from the HTML report already opened |
+| "detailed token report" | Optional `compare_tokens.py` eval with pasted `read_knowledge` responses |
 
 ## 3. Repo / branch for writes
 

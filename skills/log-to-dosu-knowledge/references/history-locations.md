@@ -74,8 +74,9 @@ python3 "$SKILL_DIR/scripts/parse_agent_logs.py" --self-test
 # Pending notes when MCP write is unavailable
 python3 "$SKILL_DIR/scripts/pending_knowledge.py" list
 
-# Optional HTML report (only if user asks)
+# HTML report (default after writes)
 python3 "$SKILL_DIR/scripts/generate_report.py" \
   --inventory /tmp/dosu-log-inventory.json \
+  --candidates /tmp/dosu-log-candidates.json \
   --out /tmp/dosu-knowledge-report.html --open
 ```
