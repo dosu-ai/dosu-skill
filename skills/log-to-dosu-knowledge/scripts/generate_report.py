@@ -110,6 +110,48 @@ def esc(s: Any) -> str:
     return html.escape("" if s is None else str(s))
 
 
+def notes_section_copy(candidates: list[dict[str, Any]]) -> tuple[str, str, str, str]:
+    """Heading, lede, footer title, footer body — based on candidate statuses."""
+    n = len(candidates)
+    written = sum(1 for c in candidates if (c.get("status") or "proposed").lower() == "written")
+    pending = sum(1 for c in candidates if (c.get("status") or "").lower() == "pending")
+    proposed = n - written - pending
+    if n > 0 and written == n:
+        return (
+            "Notes written to Dosu",
+            "These notes were written with write_knowledge — title + content, not the original user prompts.",
+            "Share",
+            "Notes are on the backfill branch and in the candidate-topic pipeline. Print / Save as PDF if you want a copy.",
+        )
+    if n > 0 and proposed == n:
+        return (
+            "Proposed write_knowledge calls",
+            "Exact notes that would be written — title + content, not the original user prompts.",
+            "Next step",
+            "Run the skill (without dry-run) so these payloads are written via write_knowledge.",
+        )
+    if n == 0:
+        return (
+            "write_knowledge notes",
+            "Exact notes — title + content, not the original user prompts.",
+            "Next step",
+            "Run the skill so learnings are extracted and written via write_knowledge.",
+        )
+    bits = []
+    if written:
+        bits.append(f"{written} written")
+    if proposed:
+        bits.append(f"{proposed} proposed")
+    if pending:
+        bits.append(f"{pending} pending")
+    return (
+        "write_knowledge notes",
+        f"{', '.join(bits)} — title + content, not the original user prompts.",
+        "Share",
+        "Written notes are in the candidate-topic pipeline. Proposed/pending items still need a write.",
+    )
+
+
 def build_report(
     *,
     inventory: dict[str, Any],
@@ -148,6 +190,7 @@ def build_report(
     source_chips = "".join(
         f'<span class="chip">{esc(k)}: {esc(v)}</span>' for k, v in by_source.items()
     )
+    notes_heading, notes_lede, footer_title, footer_body = notes_section_copy(candidates)
 
     candidate_rows = []
     for i, c in enumerate(candidates, 1):
@@ -421,8 +464,8 @@ def build_report(
     {token_section}
 
     <section>
-      <h2>Proposed write_knowledge calls <span class="muted">({len(candidates)})</span></h2>
-      <p class="lede">Exact notes that would be (or were) written — title + content, not the original user prompts.</p>
+      <h2>{esc(notes_heading)} <span class="muted">({len(candidates)})</span></h2>
+      <p class="lede">{esc(notes_lede)}</p>
       {"".join(candidate_rows) if candidate_rows else '<p class="muted">No write_knowledge payloads yet. Run the skill (or dry-run) so the agent extracts learnings into --candidates.</p>'}
     </section>
 
@@ -442,12 +485,8 @@ def build_report(
     </section>
 
     <footer class="cta">
-      <h2>Next step</h2>
-      <p>
-        Run the skill (or dry-run) so these payloads are written via
-        <code>write_knowledge</code>. The default path is mining logs into
-        Branch Notes; share this HTML/PDF only if you want a written summary.
-      </p>
+      <h2>{esc(footer_title)}</h2>
+      <p>{esc(footer_body)}</p>
       <p class="meta">
         Print tip: use <strong>Print / Save as PDF</strong> above (or ⌘P / Ctrl+P).
         Logs never leave the engineer’s machine in this local flow — only note text is written to Dosu.
