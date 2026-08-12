@@ -29,7 +29,9 @@ unless the user asked for dry-run.
 - **title**: noun phrase topic (`page_version UniqueViolation race`), not a sentence
 - **content**: self-contained observation in plain language; include file/path pointers when useful
 - **repo**: literal `git remote get-url origin`
-- **branch**: for this skill, the run’s synthetic `dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS>` (not the checkout branch)
+- **branch**: always the run’s synthetic `dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS>` —
+  never the checkout branch, never a per-session git branch from the log, and
+  never ask the user which branch to attribute to
 - **tags**: optional free-form (`sentry`, `race`, `mcp`)
 
 ## Good vs bad

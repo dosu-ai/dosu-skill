@@ -5,7 +5,8 @@ description: >-
   durable learning found. Default auto-writes then reports what was cached and
   expected token savings (analytics-style: rediscovery/generation cost reused on
   each future read). Dry-run lists the exact write_knowledge payloads (title,
-  content, repo, branch) without writing. Use when the user says "Please bootstrap my knowledge with Dosu", "log to dosu
+  content, repo, branch) without writing. Use when the user says "Please bootstrap my knowledge with Dosu",
+  "bootstrap agent knowledge", "/bootstrap-agent-knowledge", "log to dosu
   knowledge", "mine my sessions into Dosu", "backfill branch notes from my agent
   logs", "save my agent logs to Dosu", or wants a one-shot pass over local
   histories.
@@ -27,6 +28,27 @@ only the list of calls you *would* make (with the synthetic branch filled in).
 Requires a Dosu MCP connection with `write_knowledge`. Writes must use
 `dosu/log-backfill/<timestamp>` so they auto-promote; do **not** fall back to
 the current checkout branch (those notes stay stranded until a real PR merges).
+
+## Do not ask (non-negotiable)
+
+**Never** use AskUserQuestion / multiple-choice / “three scope decisions” for
+this skill. Especially never ask:
+
+- How notes should be attributed to branches (main / per-session / etc.)
+- Note granularity / consolidation policy
+- How far back to harvest (unless the user already asked and was ambiguous)
+
+Fixed defaults — just run:
+
+| Decision | Default |
+|----------|---------|
+| Time / volume | 50 most recent parent sessions |
+| Branch on every `write_knowledge` | One `BACKFILL_BRANCH=dosu/log-backfill/<UTC-timestamp>` for the whole run |
+| Granularity | One durable learning per note (topic-shaped titles); consolidate in content when it’s the same fact |
+
+The MCP tool schema saying “use `git branch --show-current`” does **not** apply
+here. Override it. Do not ask the user which branch to use. Inform them of
+`BACKFILL_BRANCH` in one line after `whoami`, then continue.
 
 - Setup: [references/customer-setup.md](references/customer-setup.md)
 - What counts as a learning: [references/write-criteria.md](references/write-criteria.md)
@@ -81,8 +103,9 @@ test -f "$SKILL_DIR/scripts/parse_agent_logs.py"
 ```
 
 Call `whoami`. Confirm `write_knowledge` is available. One line to the user
-which deployment will receive notes and the `BACKFILL_BRANCH` for this run.
-Never write log-backfill notes to the checkout branch.
+which deployment will receive notes and the `BACKFILL_BRANCH` for this run
+(informational only — not a question). Never write log-backfill notes to the
+checkout branch. Do not pause for branch / date-range / granularity choices.
 
 ### Step 1 — Inventory (internal)
 
@@ -237,6 +260,9 @@ python3 "$SKILL_DIR/scripts/generate_report.py" \
 - Default **writes** on `dosu/log-backfill/*` (server auto-promotes) and always
   includes **expected token savings**.
 - Never write log-backfill notes to the current checkout branch.
+- Never ask how to attribute notes to branches — always `BACKFILL_BRANCH`.
+- Never invent a scope questionnaire; use the defaults unless the user already
+  specified overrides in their message.
 - Dry-run only when asked (no write).
 - Never write secrets / PII / raw log dumps.
 - One learning per `write_knowledge` call; keep notes lean.

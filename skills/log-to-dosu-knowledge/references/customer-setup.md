@@ -72,6 +72,10 @@ Writes under `dosu/log-backfill/*` auto-enqueue notes-upflow, so notes enter the
 candidate-topic pipeline without needing a real PR merge. Works for any repo
 connected to the Library (not just dosu-ai/dosu).
 
+**Do not ask the user how to attribute notes to branches** (main vs per-session
+vs checkout). Branch is not a product choice for this skill — it is always the
+synthetic backfill name so auto-promote runs.
+
 Host must be github.com / gitlab.com / dev.azure.com unless Dosu has allowlisted
 their self-hosted git host.
 
