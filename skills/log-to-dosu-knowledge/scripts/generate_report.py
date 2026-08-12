@@ -73,8 +73,55 @@ def load_pending(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+CHARS_PER_TOKEN = 4.0
+
+
 def effective_tokens(t: dict[str, Any]) -> int:
     return int(t.get("reported_tokens") or t.get("estimated_tokens") or 0)
+
+
+def token_totals_from_candidates(
+    candidates: list[dict[str, Any]],
+    inventory: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Fill Estimated context savings from note rediscovery estimates.
+
+    Same model as summarize_savings.py: replaced ≈ Σ approx_rediscovery_tokens.
+    Read cost is chars/4 of title+content (lean note a future read_knowledge returns).
+    """
+    if not candidates:
+        return None
+    replaced = 0
+    has_rediscovery = False
+    read_cost = 0
+    ids: set[str] = set()
+    for c in candidates:
+        tid = c.get("transcript_id")
+        if tid:
+            ids.add(str(tid))
+        raw = c.get("approx_rediscovery_tokens")
+        if raw is not None:
+            has_rediscovery = True
+            replaced += max(0, int(raw))
+        blob = f"{c.get('title') or ''}\n{c.get('content') or ''}"
+        read_cost += int(round(len(blob) / CHARS_PER_TOKEN))
+    if not has_rediscovery:
+        return None
+    baseline = 0
+    for t in inventory.get("transcripts") or []:
+        if str(t.get("transcript_id") or "") in ids:
+            baseline += effective_tokens(t)
+    if not baseline:
+        baseline = int((inventory.get("totals") or {}).get("effective_tokens") or 0)
+    saved = max(0, replaced - read_cost)
+    pct = round(100.0 * saved / baseline, 1) if baseline else 0.0
+    return {
+        "baseline_tokens": baseline,
+        "replaced_baseline_tokens": replaced,
+        "read_knowledge_tokens": read_cost,
+        "tokens_saved": saved,
+        "pct_saved": pct,
+    }
 
 
 def merge_pending(
@@ -183,6 +230,13 @@ def build_report(
 
     tok = (token_report or {}).get("totals") or {}
     has_token = bool(token_report and tok)
+    derived_savings = False
+    if not has_token:
+        derived = token_totals_from_candidates(candidates, inventory)
+        if derived:
+            tok = derived
+            has_token = True
+            derived_savings = True
 
     # Heavy sessions (top by tokens)
     heavy = sorted(transcripts, key=effective_tokens, reverse=True)[:8]
@@ -241,14 +295,18 @@ def build_report(
     <div class="stat"><div class="label">Read cost</div><div class="value">{fmt_int(tok.get("read_knowledge_tokens"))}</div></div>
     <div class="stat highlight"><div class="label">Est. tokens saved</div><div class="value">{fmt_int(tok.get("tokens_saved"))} <span class="pct">({esc(pct_s)})</span></div></div>
   </div>
-  <p class="footnote">Relative estimate (host-reported tokens when available, else chars/4). Not a billing invoice. Large unrelated branch-note dumps in <code>read_knowledge</code> can erase savings — lean notes matter.</p>
+  <p class="footnote">{esc(
+        "From each note's approx_rediscovery_tokens minus estimated note-read cost (chars/4). Same model as the chat savings line. Not a billing invoice."
+        if derived_savings
+        else "Relative estimate (host-reported tokens when available, else chars/4). Not a billing invoice. Large unrelated branch-note dumps in read_knowledge can erase savings — lean notes matter."
+    )}</p>
 </section>
 """
     else:
         token_section = """
 <section>
   <h2>Estimated context savings</h2>
-  <p class="muted">No token-report JSON was provided. Re-run with <code>--token-report</code> after a <code>compare_tokens.py</code> pass for savings numbers.</p>
+  <p class="muted">No rediscovery estimates on the notes yet — each candidate needs <code>approx_rediscovery_tokens</code> (or pass <code>--token-report</code>).</p>
 </section>
 """
 

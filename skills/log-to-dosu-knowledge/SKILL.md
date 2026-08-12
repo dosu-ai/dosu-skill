@@ -21,7 +21,7 @@ description: >-
 3. Write each under a synthetic `dosu/log-backfill/<UTC-timestamp>` branch  
    (server auto-enqueues notes-upflow for that prefix — same path as a PR merge)  
 4. Tell the user **what was cached**, **expected token savings**, and the backfill branch  
-5. Open the HTML report (`generate_report.py --open`)
+5. Open the HTML report (`generate_report.py --open`), including **Estimated context savings**
 
 **Dry-run:** same extraction, but **do not** call `write_knowledge`. Output is
 only the list of calls you *would* make (with the synthetic branch filled in).
@@ -89,7 +89,7 @@ Progress:
 - [ ] 1. Inventory (find sessions worth mining — internal)
 - [ ] 2. Digest those sessions
 - [ ] 3. Build the write_knowledge payload list (+ rediscovery token estimate)
-- [ ] 4a. Default: write on BACKFILL_BRANCH (auto-promotes) → open HTML report → reply
+- [ ] 4a. Default: write on BACKFILL_BRANCH (auto-promotes) → open HTML report (with estimated context savings) → reply
 - [ ] 4b. Dry-run: print the payload list → stop (no writes, no finalize)
 ```
 
@@ -216,7 +216,8 @@ Wrote on dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS> (auto-promoted into the candida
 
 Do **not** stop at “Saved N notes” without the savings line.
 
-Then always open the HTML report (not opt-in):
+Then always open the HTML report (not opt-in). Estimated context savings is filled from each note's `approx_rediscovery_tokens` — do not skip that field in step 3.
+
 
 ```bash
 python3 "$SKILL_DIR/scripts/generate_report.py" \
@@ -256,12 +257,12 @@ these were written).
 | User says | Behavior |
 |-----------|----------|
 | "PDF" | Print / Save as PDF from the HTML report already opened |
-| "detailed token report" | Full `compare_tokens.py` counterfactual (baseline vs read) |
+| "detailed token report" | Optional `compare_tokens.py` eval with pasted `read_knowledge` responses (overrides the default estimate) |
 
 ## Guardrails
 
 - Default **writes** on `dosu/log-backfill/*` (server auto-promotes) and always
-  includes **expected token savings** and **opens the HTML report**.
+  includes **expected token savings**, **opens the HTML report**, and fills **Estimated context savings** on that report.
 - Never write log-backfill notes to the current checkout branch.
 - Never ask how to attribute notes to branches — always `BACKFILL_BRANCH`.
 - Never invent a scope questionnaire; use the defaults unless the user already
@@ -274,6 +275,6 @@ these were written).
 
 ## Quick examples
 
-- "Please bootstrap my knowledge with Dosu." → write on backfill branch (auto-promotes) + cached titles + expected savings + open HTML report.
+- "Please bootstrap my knowledge with Dosu." → write on backfill branch (auto-promotes) + cached titles + expected savings + open HTML report (with estimated context savings).
 - "Mine my agent logs into Dosu." → same default write flow.
 - "Dry-run log to dosu knowledge." → list of `write_knowledge` payloads (synthetic branch) only.
