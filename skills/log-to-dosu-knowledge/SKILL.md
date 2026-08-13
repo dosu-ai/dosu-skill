@@ -218,6 +218,7 @@ Do **not** stop at “Saved N notes” without the savings line.
 
 Then always open the HTML report (not opt-in). Estimated context savings is filled from each note's `approx_rediscovery_tokens` — do not skip that field in step 3.
 
+The reporter assumes notes were written; pass `--dry-run` only if generating HTML without write_knowledge.
 
 ```bash
 python3 "$SKILL_DIR/scripts/generate_report.py" \
@@ -250,7 +251,7 @@ Dry-run — would call write_knowledge N times:
 
 That list **is** the dry-run output. Not session prompts. Not inventory scores.
 Optionally append the same `summarize_savings.py` block (expected savings if
-these were written).
+these were written). If you open the HTML on a dry-run, pass `--dry-run`.
 
 ## Opt-in extras
 
