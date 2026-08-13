@@ -38,6 +38,8 @@ Usage:
   python3 generate_report.py --inventory inv.json --candidates c.json --out report.html
   python3 generate_report.py --inventory inv.json --candidates c.json \\
       --token-report tokens.json --out report.html --open
+  python3 generate_report.py --inventory inv.json --candidates c.json \\
+      --dry-run --out report.html --open
 """
 
 from __future__ import annotations
@@ -146,6 +148,26 @@ def merge_pending(
     return candidates
 
 
+def apply_status_defaults(
+    candidates: list[dict[str, Any]], *, dry_run: bool
+) -> list[dict[str, Any]]:
+    """Fill missing/unknown status: proposed on dry-run, written otherwise.
+
+    Existing written/pending/proposed values are kept (case-insensitive).
+    Always returns copies.
+    """
+    fallback = "proposed" if dry_run else "written"
+    known = {"written", "pending", "proposed"}
+    out: list[dict[str, Any]] = []
+    for c in candidates:
+        row = dict(c)
+        current = (row.get("status") or "").strip().lower()
+        if current not in known:
+            row["status"] = fallback
+        out.append(row)
+    return out
+
+
 def fmt_int(n: Any) -> str:
     try:
         return f"{int(n):,}"
@@ -160,7 +182,7 @@ def esc(s: Any) -> str:
 def notes_section_copy(candidates: list[dict[str, Any]]) -> tuple[str, str, str, str]:
     """Heading, lede, footer title, footer body — based on candidate statuses."""
     n = len(candidates)
-    written = sum(1 for c in candidates if (c.get("status") or "proposed").lower() == "written")
+    written = sum(1 for c in candidates if (c.get("status") or "written").lower() == "written")
     pending = sum(1 for c in candidates if (c.get("status") or "").lower() == "pending")
     proposed = n - written - pending
     if n > 0 and written == n:
@@ -208,6 +230,7 @@ def build_report(
     org_name: str | None,
     repo: str | None,
     branch: str | None,
+    dry_run: bool = False,
 ) -> str:
     totals = inventory.get("totals") or {}
     by_source = totals.get("by_source") or {}
@@ -218,6 +241,7 @@ def build_report(
     # Never invent "notes" from inventory user prompts — those are not
     # write_knowledge payloads. Empty list until the agent extracts learnings.
     candidates = merge_pending(candidates, pending)
+    candidates = apply_status_defaults(candidates, dry_run=dry_run)
 
     org = org_name or cand_doc.get("org_name") or "Your team"
     repo_s = repo or cand_doc.get("repo") or inventory.get("cwd") or "—"
@@ -254,7 +278,7 @@ def build_report(
             if body
             else "<p class='muted'>Session-level gap — extract a lean note before writing to Dosu.</p>"
         )
-        status = c.get("status") or "proposed"
+        status = c.get("status") or "written"
         candidate_rows.append(f"""
 <article class="card" id="c-{i}">
   <header>
@@ -572,6 +596,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch", type=str, default=None)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--open", action="store_true", help="open in default browser")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="label missing-status candidates as proposed (dry-run HTML; default path assumes written)",
+    )
     args = parser.parse_args(argv)
 
     inventory = load_json(args.inventory)
@@ -587,6 +616,7 @@ def main(argv: list[str] | None = None) -> int:
         org_name=args.org_name,
         repo=args.repo,
         branch=args.branch,
+        dry_run=args.dry_run,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(html_out, encoding="utf-8")
