@@ -2,8 +2,11 @@
 """Inventory agent histories from Cursor, Claude Code, and Codex.
 
 Discovers JSONL session logs across all three hosts, normalizes them into one
-inventory, estimates (or reads reported) tokens, and ranks sessions that look
-like they contain durable knowledge worth writing to Dosu.
+inventory, estimates (or reads reported) tokens, and ranks sessions for mining
+by candidate_score (highest first).
+
+First-time-user logs are assumed to predate Dosu. Rank by size and exploration
+only.
 
 Usage:
   python3 parse_agent_logs.py
@@ -31,6 +34,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+
+from activity_buckets import ToolBucketMap, accumulate_jsonl_obj, empty_buckets
 
 CHARS_PER_TOKEN = 4.0
 Source = Literal["cursor", "claude", "codex"]
@@ -98,6 +103,19 @@ def _iso_mtime(path: Path) -> str:
 def encode_project_path(cwd: Path) -> str:
     """Claude/Cursor-style project folder: absolute path with / → -."""
     return str(cwd.resolve()).lstrip("/").replace("/", "-")
+
+
+def unique_resolved_paths(paths: Iterable[Path]) -> list[Path]:
+    """Deduplicate paths by resolved location, preserving first-seen order."""
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for path in paths:
+        key = path.resolve()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +212,24 @@ def discover_claude(cwd: Path | None) -> list[SessionRef]:
     else:
         project_dirs = [p for p in base.iterdir() if p.is_dir()]
 
+    # "-" + encode_project_path(cwd) and re.sub(non-alnum) of cwd.resolve()
+    # are the same path (leading "/" becomes "-"). Dedup before globbing.
+    project_dirs = unique_resolved_paths(project_dirs)
+
     refs: list[SessionRef] = []
+    seen_ref_paths: set[Path] = set()
+
+    def _emit(ref: SessionRef) -> None:
+        key = ref.path.resolve()
+        if key in seen_ref_paths:
+            return
+        seen_ref_paths.add(key)
+        refs.append(ref)
+
     for project_dir in project_dirs:
         # Flat layout: <session-id>.jsonl next to optional subagents/
         for path in project_dir.glob("*.jsonl"):
-            refs.append(
+            _emit(
                 SessionRef(
                     source="claude",
                     path=path,
@@ -210,7 +241,7 @@ def discover_claude(cwd: Path | None) -> list[SessionRef]:
         sessions = project_dir / "sessions"
         if sessions.is_dir():
             for path in sessions.glob("*.jsonl"):
-                refs.append(
+                _emit(
                     SessionRef(
                         source="claude",
                         path=path,
@@ -220,8 +251,8 @@ def discover_claude(cwd: Path | None) -> list[SessionRef]:
                 )
         # Subagents: <session-id>/subagents/*.jsonl or subagents/agent-*.jsonl
         for path in project_dir.rglob("*.jsonl"):
-            if "subagents" in path.parts and path not in {r.path for r in refs}:
-                refs.append(
+            if "subagents" in path.parts:
+                _emit(
                     SessionRef(
                         source="claude",
                         path=path,
@@ -406,12 +437,36 @@ class TranscriptSummary:
     cwd: str | None = None
     git_branch: str | None = None
     token_basis: str = "chars/4"
+    context_tokens: int = 0
+    code_tokens: int = 0
+    planning_tokens: int = 0
+    other_tokens: int = 0
+    learning_tokens: int = 0
+    skip_mine: bool = False
+    skip_reason: str | None = None
 
 
 def effective_tokens(s: TranscriptSummary) -> int:
     if s.reported_tokens is not None and s.reported_tokens > 0:
         return s.reported_tokens
     return s.estimated_tokens
+
+
+_PUBLIC_SUMMARY_OMIT = (
+    "knowledge_reads",
+    "knowledge_writes",
+    "already_wrote_knowledge",
+    "write_knowledge_calls",
+    "read_knowledge_calls",
+)
+
+
+def public_summary(s: TranscriptSummary) -> dict[str, Any]:
+    """asdict a transcript without prior knowledge I/O for the mining agent."""
+    d = asdict(s)
+    for key in _PUBLIC_SUMMARY_OMIT:
+        d.pop(key, None)
+    return d
 
 
 def score_candidate(s: TranscriptSummary) -> None:
@@ -428,15 +483,9 @@ def score_candidate(s: TranscriptSummary) -> None:
     if s.rediscovery_tool_calls >= 15:
         score += min(s.rediscovery_tool_calls / 15.0, 3.0)
         reasons.append(f"{s.rediscovery_tool_calls} rediscovery tool calls")
-    if s.knowledge_writes == 0 and s.rediscovery_tool_calls >= 8:
+    if s.rediscovery_tool_calls >= 8:
         score += 2.0
-        reasons.append("no write_knowledge despite exploration")
-    if s.knowledge_reads == 0 and tok >= 5000:
-        score += 1.0
-        reasons.append("never called read_knowledge")
-    if s.knowledge_writes > 0:
-        score += 0.5
-        reasons.append(f"already wrote knowledge ({s.knowledge_writes})")
+        reasons.append("exploration worth caching")
     joined = " ".join(s.user_queries).lower()
     if any(
         w in joined
@@ -532,6 +581,10 @@ def _empty_accum() -> dict[str, Any]:
         "git_branch": None,
         "token_basis": "chars/4",
         "usage_by_message_id": {},
+        "context_chars": 0,
+        "code_chars": 0,
+        "tool_map": ToolBucketMap(),
+        "buckets": empty_buckets(),
     }
 
 
@@ -576,6 +629,44 @@ def _finalize(
         cwd=acc.get("cwd"),
         git_branch=acc.get("git_branch"),
         token_basis=acc.get("token_basis") or "chars/4",
+        context_tokens=(
+            int(round(acc.get("context_chars", 0) / CHARS_PER_TOKEN))
+            if acc.get("context_chars")
+            else 0
+        ),
+        code_tokens=(
+            int(round(acc.get("code_chars", 0) / CHARS_PER_TOKEN))
+            if acc.get("code_chars")
+            else 0
+        ),
+        planning_tokens=(
+            int(round((acc.get("buckets") or {}).get("planning", 0) / CHARS_PER_TOKEN))
+            if (acc.get("buckets") or {}).get("planning")
+            else 0
+        ),
+        other_tokens=(
+            int(round((acc.get("buckets") or {}).get("other", 0) / CHARS_PER_TOKEN))
+            if (acc.get("buckets") or {}).get("other")
+            else 0
+        ),
+        learning_tokens=(
+            int(
+                round(
+                    (
+                        (acc.get("buckets") or {}).get("context", 0)
+                        + (acc.get("buckets") or {}).get("planning", 0)
+                        + (acc.get("buckets") or {}).get("other", 0)
+                    )
+                    / CHARS_PER_TOKEN
+                )
+            )
+            if (
+                (acc.get("buckets") or {}).get("context", 0)
+                + (acc.get("buckets") or {}).get("planning", 0)
+                + (acc.get("buckets") or {}).get("other", 0)
+            )
+            else 0
+        ),
     )
     score_candidate(summary)
     return summary
@@ -615,6 +706,12 @@ def _note_tool(
 # ---------------------------------------------------------------------------
 
 
+def _attribute_buckets(acc: dict[str, Any], obj: dict[str, Any]) -> None:
+    accumulate_jsonl_obj(obj, acc["buckets"], acc["tool_map"])
+    acc["context_chars"] = acc["buckets"]["context"]
+    acc["code_chars"] = acc["buckets"]["code"]
+
+
 def parse_cursor(
     path: Path, session_id: str, *, is_subagent: bool
 ) -> TranscriptSummary:
@@ -628,6 +725,7 @@ def parse_cursor(
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            _attribute_buckets(acc, obj)
             role = obj.get("role")
             if role is None and obj.get("type") in {"turn_ended", "error"}:
                 continue
@@ -698,6 +796,7 @@ def parse_claude(
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            _attribute_buckets(acc, obj)
             etype = obj.get("type")
             if obj.get("cwd") and not acc["cwd"]:
                 acc["cwd"] = obj.get("cwd")
@@ -790,6 +889,7 @@ def parse_codex(path: Path, session_id: str, *, is_subagent: bool) -> Transcript
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            _attribute_buckets(acc, obj)
             etype = obj.get("type")
             payload = obj.get("payload") or {}
 
@@ -925,7 +1025,7 @@ def build_digest(ref: SessionRef, *, max_assistant_chars: int = 4000) -> dict[st
     else:
         turns = _digest_codex(ref.path, max_assistant_chars=max_assistant_chars)
 
-    return {"summary": asdict(summary), "turns": turns}
+    return {"summary": public_summary(summary), "turns": turns}
 
 
 def _digest_cursor(path: Path, *, max_assistant_chars: int) -> list[dict[str, Any]]:
@@ -1065,6 +1165,31 @@ def _digest_codex(path: Path, *, max_assistant_chars: int) -> list[dict[str, Any
     return turns
 
 
+_MCP_DIGEST_TOOLS = frozenset({"CallMcpTool", "GetMcpTools"})
+
+
+def _copy_mcp_digest_fields(
+    entry: dict[str, Any], name: str | None, inp: Any
+) -> None:
+    """Copy MCP identity + args so the report can label non-knowledge calls."""
+    if not isinstance(inp, dict):
+        return
+    is_mcp = name in _MCP_DIGEST_TOOLS or bool(inp.get("toolName") or inp.get("server"))
+    if not is_mcp:
+        return
+    tool_name = inp.get("toolName") or inp.get("tool_name")
+    if tool_name:
+        entry["toolName"] = tool_name
+    server = inp.get("server")
+    if server:
+        entry["server"] = server
+    if name == "GetMcpTools" and inp.get("pattern"):
+        entry["pattern"] = inp["pattern"]
+    args = inp.get("arguments")
+    if isinstance(args, dict):
+        entry["arguments"] = args
+
+
 def _blocks_to_digest(
     content: list[Any], max_text_chars: int
 ) -> tuple[list[str], list[dict[str, Any]]]:
@@ -1080,21 +1205,20 @@ def _blocks_to_digest(
                 t = t[:max_text_chars] + "\n…[truncated]"
             texts.append(t)
         elif btype == "tool_use":
-            entry: dict[str, Any] = {"name": block.get("name")}
-            kcall = _knowledge_from_name_and_input(
-                block.get("name"), block.get("input")
-            )
+            name = block.get("name")
+            entry: dict[str, Any] = {"name": name}
+            inp = block.get("input") or {}
+            kcall = _knowledge_from_name_and_input(name, inp)
             if kcall:
                 entry["knowledge"] = kcall
-            else:
-                inp = block.get("input") or {}
-                if isinstance(inp, dict):
-                    if "path" in inp:
-                        entry["path"] = inp.get("path")
-                    if "pattern" in inp:
-                        entry["pattern"] = inp.get("pattern")
-                    if "command" in inp:
-                        entry["command_preview"] = str(inp.get("command"))[:160]
+            elif isinstance(inp, dict):
+                if "path" in inp:
+                    entry["path"] = inp.get("path")
+                if "pattern" in inp:
+                    entry["pattern"] = inp.get("pattern")
+                if "command" in inp:
+                    entry["command_preview"] = str(inp.get("command"))[:160]
+            _copy_mcp_digest_fields(entry, name, inp)
             tools.append(entry)
         elif btype == "tool_result":
             tools.append({"name": "tool_result"})
@@ -1104,6 +1228,57 @@ def _blocks_to_digest(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+
+BOOTSTRAP_PHRASES = (
+    "please bootstrap my knowledge with dosu",
+    "/log-to-dosu-knowledge",
+    "/bootstrap-agent-knowledge",
+    "mine my agent logs into dosu",
+)
+
+# Follow-ups that are still the harvest skill, not a new task.
+HARVEST_FOLLOWUP_MARKERS = (
+    "log-to-dosu",
+    "bootstrap my knowledge",
+    "write_knowledge",
+    "digest",
+    "inventory",
+)
+
+
+def _is_short_bootstrap_prompt(q: str) -> bool:
+    text = (q or "").strip()
+    if not text or len(text) > 400:
+        return False
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in BOOTSTRAP_PHRASES)
+
+
+def _is_harvest_followup(q: str) -> bool:
+    """True when a later query is still the harvest, not a different task."""
+    if _is_short_bootstrap_prompt(q):
+        return True
+    lowered = (q or "").strip().lower()
+    if not lowered:
+        return True
+    return any(marker in lowered for marker in HARVEST_FOLLOWUP_MARKERS)
+
+
+def is_bootstrap_only_session(s: TranscriptSummary) -> bool:
+    """True when the first query starts a harvest and later ones stay on it.
+
+    The CLI handoff line ("Please bootstrap my knowledge with Dosu from my
+    local agent logs.") matches BOOTSTRAP_PHRASES. Follow-ups that still
+    mention digest/inventory/write_knowledge/log-to-dosu do not disqualify.
+    A later query that is a clearly different task does.
+    """
+    queries = [q for q in (s.user_queries or []) if str(q).strip()]
+    if not queries:
+        return False
+    if not _is_short_bootstrap_prompt(queries[0]):
+        return False
+    return all(_is_harvest_followup(q) for q in queries[1:])
 
 
 def find_ref(refs: list[SessionRef], session_id: str) -> SessionRef:
@@ -1125,18 +1300,18 @@ def find_ref(refs: list[SessionRef], session_id: str) -> SessionRef:
 
 def print_table(summaries: list[TranscriptSummary]) -> None:
     print(
-        f"{'Src':<7} {'ID':<38} {'Tok':>8} {'Rdisc':>6} {'rK':>3} {'wK':>3} {'Score':>6}  Query"
+        f"{'Src':<7} {'ID':<38} {'Learn':>8} {'Rdisc':>6} {'Score':>6}  Query"
     )
-    print("-" * 130)
+    print("-" * 120)
     for s in summaries:
-        tok = effective_tokens(s)
-        marker = "*" if s.reported_tokens else " "
+        tok = s.learning_tokens
+        marker = "*" if s.skip_mine else " "
         q = s.user_queries[0][:55].replace("\n", " ") if s.user_queries else ""
         print(
             f"{s.source:<7} {s.transcript_id:<38} {tok:>7}{marker} {s.rediscovery_tool_calls:>6} "
-            f"{s.knowledge_reads:>3} {s.knowledge_writes:>3} {s.candidate_score:>6}  {q}"
+            f"{s.candidate_score:>6}  {q}"
         )
-    print("(* = host-reported tokens; otherwise chars/4 estimate)")
+    print("(* = skip_mine; Learn = cost to learn, excludes code)")
 
 
 def parse_sources_arg(raw: str) -> list[Source]:
@@ -1225,9 +1400,24 @@ def run_self_test() -> int:
                                     {"type": "text", "text": "Looking into it."},
                                     {
                                         "type": "tool_use",
+                                        "id": "grep-1",
                                         "name": "Grep",
                                         "input": {"pattern": "UniqueViolation"},
                                     },
+                                ]
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "role": "user",
+                            "message": {
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": "grep-1",
+                                        "content": "UniqueViolation match in foo.py\n" * 20,
+                                    }
                                 ]
                             },
                         }
@@ -1358,8 +1548,15 @@ def run_self_test() -> int:
 
         assert "investigate the race" in (c.user_queries[0] if c.user_queries else "")
         assert c.rediscovery_tool_calls >= 1
+        assert c.context_tokens > 0, c.context_tokens
+        assert c.learning_tokens >= c.context_tokens, (
+            c.learning_tokens,
+            c.context_tokens,
+        )
+        assert c.learning_tokens > c.context_tokens, c.learning_tokens
         assert cl.reported_tokens == 1050, cl.reported_tokens  # deduped once
         assert cl.knowledge_writes == 1, cl.knowledge_writes
+        assert cl.code_tokens > 0, cl.code_tokens
         assert cx.reported_tokens == 41236, cx.reported_tokens
         assert cx.rediscovery_tool_calls >= 1
         assert detect_source(cursor) == "cursor"
@@ -1378,6 +1575,217 @@ def run_self_test() -> int:
             raise AssertionError("expected --full/--days conflict")
         except SystemExit:
             pass
+
+        # Two Claude encodings of the same cwd resolve to one project dir.
+        cwd_demo = Path("/Users/demo/repo")
+        twin_a = Path("/tmp/claude-projects") / ("-" + encode_project_path(cwd_demo))
+        twin_b = Path("/tmp/claude-projects") / re.sub(
+            r"[^A-Za-z0-9]", "-", str(cwd_demo.resolve())
+        )
+        assert twin_a == twin_b, (twin_a, twin_b)
+        assert unique_resolved_paths([twin_a, twin_b]) == [twin_a]
+
+        large = TranscriptSummary(
+            transcript_id="large-exploratory",
+            source="cursor",
+            path="/tmp/large.jsonl",
+            mtime_iso="2026-01-01T00:00:00+00:00",
+            bytes=80_000,
+            messages=40,
+            user_messages=8,
+            assistant_messages=32,
+            estimated_tokens=20_000,
+            reported_tokens=None,
+            user_query_tokens=400,
+            assistant_tokens=8_000,
+            tool_use_tokens=11_600,
+            tool_counts={"Grep": 12, "Read": 10},
+            rediscovery_tool_calls=22,
+            knowledge_reads=0,
+            knowledge_writes=3,
+            already_wrote_knowledge=True,
+            user_queries=["investigate the race"],
+        )
+        score_candidate(large)
+        assert not any("already wrote" in r for r in large.candidate_reasons), (
+            large.candidate_reasons
+        )
+        assert not any(
+            "never called read_knowledge" in r for r in large.candidate_reasons
+        ), large.candidate_reasons
+        pub = public_summary(large)
+        for key in _PUBLIC_SUMMARY_OMIT:
+            assert key not in pub, key
+
+        tiny = TranscriptSummary(
+            transcript_id="tiny",
+            source="cursor",
+            path="/tmp/tiny.jsonl",
+            mtime_iso="2026-01-01T00:00:00+00:00",
+            bytes=400,
+            messages=2,
+            user_messages=1,
+            assistant_messages=1,
+            estimated_tokens=100,
+            reported_tokens=None,
+            user_query_tokens=40,
+            assistant_tokens=60,
+            tool_use_tokens=0,
+            tool_counts={},
+            rediscovery_tool_calls=0,
+            knowledge_reads=0,
+            knowledge_writes=0,
+            already_wrote_knowledge=False,
+        )
+        score_candidate(tiny)
+        assert large.candidate_score > tiny.candidate_score, (
+            large.candidate_score,
+            tiny.candidate_score,
+        )
+        assert large.context_tokens == 0 and large.code_tokens == 0
+        assert large.learning_tokens == 0 and large.planning_tokens == 0
+        assert large.skip_mine is False and large.skip_reason is None
+
+        boot = TranscriptSummary(
+            transcript_id="boot",
+            source="cursor",
+            path="/tmp/boot.jsonl",
+            mtime_iso="2026-01-01T00:00:00+00:00",
+            bytes=200,
+            messages=2,
+            user_messages=1,
+            assistant_messages=1,
+            estimated_tokens=40,
+            reported_tokens=None,
+            user_query_tokens=20,
+            assistant_tokens=20,
+            tool_use_tokens=0,
+            tool_counts={},
+            rediscovery_tool_calls=0,
+            knowledge_reads=0,
+            knowledge_writes=0,
+            already_wrote_knowledge=False,
+            user_queries=["Please bootstrap my knowledge with Dosu"],
+        )
+        assert is_bootstrap_only_session(boot)
+        assert is_bootstrap_only_session(
+            TranscriptSummary(
+                transcript_id="slash",
+                source="cursor",
+                path="/tmp/slash.jsonl",
+                mtime_iso="2026-01-01T00:00:00+00:00",
+                bytes=200,
+                messages=1,
+                user_messages=1,
+                assistant_messages=0,
+                estimated_tokens=10,
+                reported_tokens=None,
+                user_query_tokens=10,
+                assistant_tokens=0,
+                tool_use_tokens=0,
+                tool_counts={},
+                rediscovery_tool_calls=0,
+                knowledge_reads=0,
+                knowledge_writes=0,
+                already_wrote_knowledge=False,
+                user_queries=["/log-to-dosu-knowledge"],
+            )
+        )
+        assert is_bootstrap_only_session(
+            TranscriptSummary(
+                transcript_id="mine",
+                source="cursor",
+                path="/tmp/mine.jsonl",
+                mtime_iso="2026-01-01T00:00:00+00:00",
+                bytes=200,
+                messages=1,
+                user_messages=1,
+                assistant_messages=0,
+                estimated_tokens=10,
+                reported_tokens=None,
+                user_query_tokens=10,
+                assistant_tokens=0,
+                tool_use_tokens=0,
+                tool_counts={},
+                rediscovery_tool_calls=0,
+                knowledge_reads=0,
+                knowledge_writes=0,
+                already_wrote_knowledge=False,
+                user_queries=["mine my agent logs into Dosu"],
+            )
+        )
+        assert not is_bootstrap_only_session(large)
+        assert not is_bootstrap_only_session(tiny)
+
+        cli_handoff = TranscriptSummary(
+            transcript_id="cli-handoff",
+            source="cursor",
+            path="/tmp/cli-handoff.jsonl",
+            mtime_iso="2026-01-01T00:00:00+00:00",
+            bytes=200,
+            messages=2,
+            user_messages=1,
+            assistant_messages=1,
+            estimated_tokens=40,
+            reported_tokens=None,
+            user_query_tokens=20,
+            assistant_tokens=20,
+            tool_use_tokens=0,
+            tool_counts={},
+            rediscovery_tool_calls=0,
+            knowledge_reads=0,
+            knowledge_writes=0,
+            already_wrote_knowledge=False,
+            user_queries=[
+                "Please bootstrap my knowledge with Dosu from my local agent logs."
+            ],
+        )
+        assert is_bootstrap_only_session(cli_handoff)
+        cli_handoff.user_queries.append("also debug the slack picker")
+        assert not is_bootstrap_only_session(cli_handoff)
+        cli_handoff.user_queries = [
+            "Please bootstrap my knowledge with Dosu from my local agent logs.",
+            "run the digest for 7b7c08a4",
+        ]
+        assert is_bootstrap_only_session(cli_handoff)
+
+        _, mcp_tools = _blocks_to_digest(
+            [
+                {
+                    "type": "tool_use",
+                    "name": "CallMcpTool",
+                    "input": {
+                        "server": "user-logfire",
+                        "toolName": "query_run",
+                        "arguments": {"query": "SELECT 1"},
+                    },
+                },
+                {
+                    "type": "tool_use",
+                    "name": "GetMcpTools",
+                    "input": {"server": "user-supabase", "pattern": "sql"},
+                },
+                {
+                    "type": "tool_use",
+                    "name": "CallMcpTool",
+                    "input": {
+                        "server": "user-dosu",
+                        "toolName": "read_knowledge",
+                        "arguments": {"query": "UniqueViolation"},
+                    },
+                },
+            ],
+            200,
+        )
+        assert mcp_tools[0]["toolName"] == "query_run"
+        assert mcp_tools[0]["server"] == "user-logfire"
+        assert mcp_tools[0]["arguments"]["query"] == "SELECT 1"
+        assert "knowledge" not in mcp_tools[0]
+        assert mcp_tools[1]["pattern"] == "sql"
+        assert mcp_tools[1]["server"] == "user-supabase"
+        assert mcp_tools[2]["knowledge"]["tool"] == "read_knowledge"
+        assert mcp_tools[2]["toolName"] == "read_knowledge"
+        assert mcp_tools[2]["arguments"]["query"] == "UniqueViolation"
 
         print("self-test OK")
         print(
@@ -1481,13 +1889,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"# Digest [{s['source']}] {s['transcript_id']}")
             print(f"path: {s['path']}")
             print(
-                f"tokens: effective={eff} estimated={s['estimated_tokens']} "
+                f"tokens: learning={s.get('learning_tokens', 0)} "
+                f"context={s.get('context_tokens', 0)} "
+                f"effective={eff} estimated={s['estimated_tokens']} "
                 f"reported={s.get('reported_tokens')} basis={s.get('token_basis')}"
             )
-            print(
-                f"knowledge_reads={s['knowledge_reads']} knowledge_writes={s['knowledge_writes']} "
-                f"score={s['candidate_score']}"
-            )
+            print(f"score={s['candidate_score']}")
             print(f"reasons: {s['candidate_reasons']}")
             if s.get("cwd"):
                 print(f"cwd: {s['cwd']}  branch: {s.get('git_branch')}")
@@ -1495,11 +1902,6 @@ def main(argv: list[str] | None = None) -> int:
             for q in s.get("user_queries") or []:
                 preview = q if len(q) <= 1200 else q[:1200] + "\n…[truncated]"
                 print(f"## User query\n{preview}\n")
-            if s.get("write_knowledge_calls"):
-                print("## Existing write_knowledge calls")
-                for w in s["write_knowledge_calls"]:
-                    print(json.dumps(w, indent=2, ensure_ascii=False))
-                    print()
             print("## Turns (truncated)")
             for turn in digest["turns"][:80]:
                 tools = ", ".join(t.get("name") or "?" for t in turn.get("tools") or [])
@@ -1520,6 +1922,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # refs are newest-first by mtime. Apply time window, then optional count cap
     # on most-recent sessions, then parse + rank by candidate score.
+    # Recent/--limit mode over-selects (limit*4), drops bootstrap-only, then
+    # keeps `limit` mineable sessions. --full keeps bootstrap-only with skip_mine.
     selected: list[SessionRef] = []
     for ref in refs:
         if ref.is_subagent and not args.include_subagents:
@@ -1528,15 +1932,25 @@ def main(argv: list[str] | None = None) -> int:
         if cutoff is not None and mtime < cutoff:
             continue
         selected.append(ref)
-    if limit is not None:
+    recent_mode = scope["mode"] == "recent"
+    if limit is not None and recent_mode:
+        selected = selected[: limit * 4]
+    elif limit is not None:
         selected = selected[:limit]
 
     summaries: list[TranscriptSummary] = []
     for ref in selected:
         s = parse_session(ref)
+        if is_bootstrap_only_session(s):
+            if recent_mode:
+                continue
+            s.skip_mine = True
+            s.skip_reason = "bootstrap-only"
         if effective_tokens(s) < args.min_tokens:
             continue
         summaries.append(s)
+    if limit is not None and recent_mode:
+        summaries = summaries[:limit]
 
     ranked = sorted(
         summaries,
@@ -1545,9 +1959,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     total_est = sum(s.estimated_tokens for s in ranked)
     total_eff = sum(effective_tokens(s) for s in ranked)
-    write_gaps = [
-        s for s in ranked if s.knowledge_writes == 0 and s.candidate_score >= 2.0
-    ]
+    total_ctx = sum(s.context_tokens for s in ranked)
+    total_code = sum(s.code_tokens for s in ranked)
+    total_planning = sum(s.planning_tokens for s in ranked)
+    total_other = sum(s.other_tokens for s in ranked)
+    total_learn = sum(s.learning_tokens for s in ranked)
     by_source = Counter(s.source for s in ranked)
     summaries = ranked  # inventory uses the trimmed set
 
@@ -1565,22 +1981,23 @@ def main(argv: list[str] | None = None) -> int:
         "cwd": str(cwd) if cwd else None,
         "chars_per_token": CHARS_PER_TOKEN,
         "token_note": (
-            "effective_tokens prefers host-reported usage when present "
-            "(Claude message.usage deduped by message.id; Codex token_count events). "
-            "Otherwise len(text)/4. Use for relative before/after comparison."
+            "Savings baseline is learning_tokens (cost to learn THIS fact: "
+            "context + planning + other). Excludes code (Write/Edit/mutating "
+            "shell). Never estimated/effective, never context_tokens alone. "
+            "effective_tokens still prefers host-reported usage when present."
         ),
         "totals": {
             "transcripts": len(summaries),
             "estimated_tokens": total_est,
             "effective_tokens": total_eff,
+            "context_tokens": total_ctx,
+            "code_tokens": total_code,
+            "planning_tokens": total_planning,
+            "other_tokens": total_other,
+            "learning_tokens": total_learn,
             "by_source": dict(by_source),
-            "with_write_knowledge": sum(
-                1 for s in summaries if s.already_wrote_knowledge
-            ),
-            "write_gaps": len(write_gaps),
         },
-        "write_gap_ids": [s.transcript_id for s in write_gaps],
-        "transcripts": [asdict(s) for s in ranked],
+        "transcripts": [public_summary(s) for s in ranked],
     }
 
     if args.out:
@@ -1600,27 +2017,13 @@ def main(argv: list[str] | None = None) -> int:
             scope_bits.append(f"limit={scope['limit']}")
         print(f"sources: {', '.join(sources)}  cwd: {cwd}  ({', '.join(scope_bits)})")
         print(
-            f"transcripts: {len(summaries)}  effective_tokens: {total_eff}  "
-            f"estimated_tokens: {total_est}  by_source: {dict(by_source)}  "
-            f"write_gaps: {len(write_gaps)}"
+            f"transcripts: {len(summaries)}  learning_tokens: {total_learn}  "
+            f"context_tokens: {total_ctx}  "
+            f"effective_tokens: {total_eff}  "
+            f"estimated_tokens: {total_est}  by_source: {dict(by_source)}"
         )
         print()
         print_table(ranked[:40])
-        if write_gaps:
-            print()
-            print("Top write gaps (no write_knowledge, score>=2):")
-            for s in write_gaps[:15]:
-                q = (
-                    s.user_queries[0][:80].replace("\n", " ")
-                    if s.user_queries
-                    else "(no query)"
-                )
-                print(
-                    f"  [{s.source}] {s.transcript_id}  score={s.candidate_score}  "
-                    f"tok={effective_tokens(s)}"
-                )
-                print(f"    {q}")
-                print(f"    reasons: {', '.join(s.candidate_reasons)}")
         print()
         print("Next: python3 .../parse_agent_logs.py --digest <id>")
     return 0
