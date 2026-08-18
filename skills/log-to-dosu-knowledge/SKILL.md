@@ -2,7 +2,7 @@
 name: log-to-dosu-knowledge
 description: >-
   Read Cursor / Claude Code / Codex agent logs and call write_knowledge for each
-  durable learning found. Default auto-writes then reports what was cached and
+  note found. Default auto-writes then reports what was cached and
   expected token savings (analytics-style: rediscovery/generation cost reused on
   each future read), and opens the HTML report. Dry-run lists the exact write_knowledge payloads (title,
   content, repo, branch) without writing. Use when the user says "Please bootstrap my knowledge with Dosu",
@@ -16,11 +16,13 @@ description: >-
 
 **Product (keep it this simple):**
 
-1. Read local agent logs  
-2. Decide durable learnings (not the user’s prompt — the *answer/gotcha* found)  
-3. Write each under a synthetic `dosu/log-backfill/<UTC-timestamp>` branch  
-   (server auto-enqueues notes-upflow for that prefix — same path as a PR merge)  
-4. Tell the user **what was cached**, **expected token savings**, and the backfill branch  
+This skill is for **first-time users** whose logs predate Dosu.
+
+1. Read local agent logs
+2. Decide what to write (not the user’s prompt — the *answer/gotcha*)
+3. Write each under a synthetic `dosu/log-backfill/<UTC-timestamp>` branch
+   (server auto-enqueues notes-upflow for that prefix — same path as a PR merge)
+4. Tell the user **what was cached**, **expected token savings**, and the backfill branch
 5. Open the HTML report (`generate_report.py --open`), including **Estimated context savings**
 
 **Dry-run:** same extraction, but **do not** call `write_knowledge`. Output is
@@ -45,19 +47,19 @@ Fixed defaults — just run:
 |----------|---------|
 | Time / volume | 50 most recent parent sessions |
 | Branch on every `write_knowledge` | One `BACKFILL_BRANCH=dosu/log-backfill/<UTC-timestamp>` for the whole run |
-| Granularity | One durable learning per note (topic-shaped titles); consolidate in content when it’s the same fact |
+| Granularity | One note per assistant conclusion (many notes per long chat). Consolidate only when it is the same fact. |
 
 The MCP tool schema saying “use `git branch --show-current`” does **not** apply
 here. Override it. Do not ask the user which branch to use. Inform them of
 `BACKFILL_BRANCH` in one line after `whoami`, then continue.
 
 - Setup: [references/customer-setup.md](references/customer-setup.md)
-- What counts as a learning: [references/write-criteria.md](references/write-criteria.md)
+- What to write: [references/write-criteria.md](references/write-criteria.md)
 - Log paths: [references/history-locations.md](references/history-locations.md)
 
 ## What a write looks like
 
-Each learning is one MCP call. Args are exactly:
+Each note is one MCP call. Args are exactly:
 
 | Arg | Meaning |
 |-----|---------|
@@ -67,10 +69,9 @@ Each learning is one MCP call. Args are exactly:
 | `branch` | Synthetic `dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS>` for the whole run |
 | `tags` | Optional, e.g. `["from-agent-log", "cursor"]` |
 
-**Wrong (never do this):** using the user’s first message as `title` / treating
-inventory “write gaps” as the notes. Gaps are only which *sessions* to open.
+**Wrong:** using the user’s first message as `title`, or treating inventory rows as the notes.
 
-**Right:** after reading a digest, extract the durable conclusion, e.g.
+**Right:** after reading a digest, extract the conclusion, e.g.
 
 ```
 title:   Slack PostgREST 1000-row channel picker cap
@@ -104,9 +105,11 @@ test -f "$SKILL_DIR/scripts/parse_agent_logs.py"
 ```
 
 Call `whoami`. Confirm `write_knowledge` is available. One line to the user
-which deployment will receive notes and the `BACKFILL_BRANCH` for this run
-(informational only — not a question). Never write log-backfill notes to the
-checkout branch. Do not pause for branch / date-range / granularity choices.
+which Library will receive notes and the `BACKFILL_BRANCH` for this run
+(informational only — not a question). If whoami returns an internal target field,
+do not repeat that word to the user — use the Library / org name. Never write
+log-backfill notes to the checkout branch. Do not pause for branch / date-range
+/ granularity choices.
 
 ### Step 1 — Inventory (internal)
 
@@ -128,7 +131,7 @@ python3 "$SKILL_DIR/scripts/parse_agent_logs.py" \
 #   ... --limit 100 --out /tmp/dosu-log-inventory.json
 ```
 
-Use write-gap ids to pick digests. **Do not** show gap prompts as the result.
+Use every parent session in that inventory. Rank is only for order (highest `candidate_score` first). **Do not** show user prompts or inventory rows as the result.
 
 ### Step 2 — Digest
 
@@ -137,13 +140,19 @@ python3 "$SKILL_DIR/scripts/parse_agent_logs.py" \
   --digest <id> --json > /tmp/digest-<id>.json
 ```
 
-Digest **every** write-gap in the inventory for the chosen scope. Prefer parent
-chats over `subagents/`.
+Digest **every** mineable parent session in the inventory. After each digest,
+walk **every user turn** in order (not just the last). A long investigation
+(100k+ `learning_tokens`, 50+ user turns) should yield many notes, not 1–2.
+
+Skip only empty/trivial chats (no real user query). Prefer parent chats over
+`subagents/`. Do not skip a digest because the first message looks like a
+report / Sentry / SQL paste.
 
 ### Step 3 — Build the write list
 
-For each durable fact per [write-criteria.md](references/write-criteria.md),
-append a payload:
+For each user turn that got an assistant conclusion passing
+[write-criteria.md](references/write-criteria.md), append a payload.
+**Do not treat “I already wrote one note from this transcript” as done.**
 
 ```json
 {
@@ -153,23 +162,35 @@ append a payload:
   "branch": "<$BACKFILL_BRANCH>",
   "tags": ["from-agent-log", "cursor"],
   "transcript_id": "<source session id>",
-  "approx_rediscovery_tokens": 12000
+  "approx_rediscovery_tokens": 12000,
+  "plain_english": "…",
+  "how_found": "…"
 }
 ```
+
+`plain_english` is a 1–2 sentence reword of the idea for a teammate (no function/table soup). Report-only — omit from `write_knowledge` like `approx_rediscovery_tokens`.
+`how_found` says what work found it (reads, SQL, Logfire, code paths), not a session-share token formula. Report-only — omit from `write_knowledge`.
 
 Use the same `BACKFILL_BRANCH` for every candidate in the run. Do **not** use
 the checkout branch or a per-log branch name.
 
-`approx_rediscovery_tokens` is the analytics analogue of
-`page_version.generation_tokens`: tokens spent rediscovering this fact in the
-source session (Read/Grep/Shell/etc. stretches that produced the learning).
+`approx_rediscovery_tokens` is the cost to learn THIS fact: tokens spent
+arriving at it (question + retrieval + thinking + the conclusion). Includes
+Decant context + planning + other. Excludes Write/Edit/mutating shell — a
+note cannot save implementation tokens. 100k learned → 100k saved. No cap.
+No session share.
 
-Estimate when unsure:
+Mark digest lines from the first relevant question/tool through the
+conclusion for THIS fact only. Measure with:
 
-1. From inventory, take that transcript’s effective tokens × rediscovery share
-   (same fallback as `compare_tokens.py`: rediscovery_tool_calls / total tools,
-   capped at 0.85; ×0.5 if the session already had knowledge reads).
-2. Split that budget across notes mined from the same transcript.
+```
+python3 "$SKILL_DIR/scripts/compare_tokens.py" \
+  --from-digest /tmp/digest-<id>.json --lines START-END
+```
+
+Put `approx_rediscovery_tokens` from that JSON on the payload. Omit the
+field only when the stretch cannot be identified — never invent a session
+share, never use context-bucket only, never split a session budget.
 
 Skip secrets/PII, task summaries, speculation, obvious one-file facts.
 
@@ -180,7 +201,7 @@ one shape.
 ### Step 4a — Default: write + savings
 
 For each payload, call MCP `write_knowledge` with `title` / `content` / `repo` /
-`branch` / `tags` (omit helper fields like `approx_rediscovery_tokens`). Every
+`branch` / `tags` (omit helper fields like `approx_rediscovery_tokens`, `plain_english`, and `how_found`). Every
 write must use `BACKFILL_BRANCH`. The server auto-enqueues notes-upflow for
 `dosu/log-backfill/*` (same step as a PR merge) — no separate promote call.
 
@@ -216,7 +237,7 @@ Wrote on dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS> (auto-promoted into the candida
 
 Do **not** stop at “Saved N notes” without the savings line.
 
-Then always open the HTML report (not opt-in). Estimated context savings is filled from each note's `approx_rediscovery_tokens` — do not skip that field in step 3.
+Then always open the HTML report (not opt-in). Estimated context savings is filled from each note's `approx_rediscovery_tokens` (omit the field only when the investigation stretch cannot be identified — never invent a session share).
 
 The reporter assumes notes were written; pass `--dry-run` only if generating HTML without write_knowledge.
 
@@ -224,6 +245,8 @@ The reporter assumes notes were written; pass `--dry-run` only if generating HTM
 python3 "$SKILL_DIR/scripts/generate_report.py" \
   --inventory /tmp/dosu-log-inventory.json \
   --candidates /tmp/dosu-log-candidates.json \
+  --pending .dosu/pending-knowledge.jsonl \
+  --digest-dir /tmp \
   --org-name "…" --repo "$REPO" --branch "$BACKFILL_BRANCH" \
   --out /tmp/dosu-knowledge-report.html --open
 ```
@@ -260,6 +283,17 @@ these were written). If you open the HTML on a dry-run, pass `--dry-run`.
 | "PDF" | Print / Save as PDF from the HTML report already opened |
 | "detailed token report" | Optional `compare_tokens.py` eval with pasted `read_knowledge` responses (overrides the default estimate) |
 
+## Miner miss-mode (do not say this word to the customer)
+
+Agent instructions so a harvest does not under-count:
+
+1. One note per assistant conclusion, not one per transcript — do not stop at the last tangent.
+2. Do not skip a digest because the first message looks like a report / Sentry / SQL paste.
+3. Always merge pending (`generate_report.py --pending`) before the report.
+4. Bootstrap-only sessions are excluded from the default 50 by the parser; skip them if they appear.
+5. If the Library already has the page (this run's `read_knowledge`), skip the write; status `already_in_library` is OK.
+6. The HTML baseline is inventory `learning_tokens`, not `effective_tokens` or `context_tokens` alone.
+
 ## Guardrails
 
 - Default **writes** on `dosu/log-backfill/*` (server auto-promotes) and always
@@ -270,7 +304,7 @@ these were written). If you open the HTML on a dry-run, pass `--dry-run`.
   specified overrides in their message.
 - Dry-run only when asked (no write).
 - Never write secrets / PII / raw log dumps.
-- One learning per `write_knowledge` call; keep notes lean.
+- One note per `write_knowledge` call; keep notes lean.
 - User-facing output is always about **notes** (written or proposed) + savings,
   never raw prompts.
 

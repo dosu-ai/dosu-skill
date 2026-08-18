@@ -4,9 +4,12 @@
 Analytics model (get_knowledge_token_savings):
   tokens saved on a hit = that page's generation_tokens
 
-For log-mined branch notes, approx_rediscovery_tokens is the generation-cost
-proxy (tokens spent rediscovering the fact in the source session). Expected
-savings for one future agent read of this set ≈ sum(approx_rediscovery_tokens).
+For log-mined branch notes, approx_rediscovery_tokens is the cost to learn
+THIS fact (context + planning + other: question + retrieval + thinking +
+the conclusion). Excludes Write/Edit/mutating shell. 100k learned → 100k
+saved. Expected savings for one future agent read of this set ≈ sum of
+those per-note stretch tokens. No cap. Do not use a session × tool-mix
+share. HTML baseline is inventory learning_tokens.
 
 Usage:
   python3 summarize_savings.py --candidates /tmp/dosu-log-candidates.json

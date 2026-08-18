@@ -1,7 +1,7 @@
 # Setup (Dosu MCP required)
 
 This skill mines **local** Cursor / Claude Code / Codex histories and writes
-durable notes to the team's Dosu deployment via `write_knowledge`. Logs never
+notes to the team's Dosu Library via `write_knowledge`. Logs never
 leave the machine; only lean note text is sent.
 
 ## 1. Connect Dosu + install skills
@@ -27,15 +27,9 @@ npx @dosu/cli skill install
 ```
 
 Confirm the agent can call `whoami` and sees `write_knowledge`.
-OSS-only connections (no deployment) cannot write team knowledge.
+OSS-only connections (public libraries only) cannot write team knowledge.
 Log-backfill writes use `dosu/log-backfill/<timestamp>`; the server auto-enqueues
 notes-upflow for that branch prefix (requires a backend that supports it).
-
-Manual MCP URL shape:
-
-```
-https://api.dosu.dev/v1/mcp/deployments/<deployment-id>
-```
 
 ## 2. Run it
 
@@ -45,7 +39,7 @@ In the agent chat (repo open, MCP connected):
 >
 > (also: “Mine my agent logs into Dosu.”)
 
-The agent reads local logs, extracts durable learnings, writes each note under
+The agent reads local logs, extracts notes, writes each under
 a synthetic `dosu/log-backfill/<UTC-timestamp>` branch (server auto-promotes into
 the candidate-topic pipeline — same upflow path as a PR merge), opens the HTML
 report (including estimated context savings), then replies with **what was cached**, **expected token savings**, and
