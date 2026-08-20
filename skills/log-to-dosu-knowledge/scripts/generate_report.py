@@ -22,6 +22,7 @@ Candidates schema:
       "title": "OAuth refresh token expiry",
       "content": "self-contained note body…",
       "approx_rediscovery_tokens": 12000,
+      "investigation_lines": "128-131",
       "plain_english": "1–2 sentences, no function/table soup",
       "how_found": "what the agent had to read/trace (Logfire, SQL, Slack catalog, code paths) to land the conclusion",
       "user_query": "why does auth retry loop?",
@@ -245,6 +246,20 @@ def parse_line_spec(spec: Any) -> set[int]:
         except ValueError:
             continue
     return out
+
+
+def fallback_line_spec(turns: list[dict[str, Any]]) -> set[int]:
+    lines: list[int] = []
+    for turn in turns:
+        try:
+            line = int(turn.get("line") or 0)
+        except (TypeError, ValueError):
+            continue
+        if line > 0:
+            lines.append(line)
+    if not lines:
+        return set()
+    return set(range(min(lines), max(lines) + 1))
 
 
 def load_digest(
@@ -510,10 +525,12 @@ def render_trace_html(
     cache: dict[str, Any],
 ) -> str:
     spec = parse_line_spec(candidate.get("investigation_lines"))
-    if not spec:
-        return ""
     digest = load_digest(digest_dir, str(candidate.get("transcript_id") or ""), cache)
     if not digest:
+        return ""
+    if not spec:
+        spec = fallback_line_spec(list(digest.get("turns") or []))
+    if not spec:
         return ""
     turns = expand_digest_turns(list(digest.get("turns") or []), spec)
     if not turns:
