@@ -163,6 +163,7 @@ For each user turn that got an assistant conclusion passing
   "tags": ["from-agent-log", "cursor"],
   "transcript_id": "<source session id>",
   "approx_rediscovery_tokens": 12000,
+  "investigation_lines": "128-131",
   "plain_english": "…",
   "how_found": "…"
 }
@@ -170,6 +171,7 @@ For each user turn that got an assistant conclusion passing
 
 `plain_english` is a 1–2 sentence reword of the idea for a teammate (no function/table soup). Report-only — omit from `write_knowledge` like `approx_rediscovery_tokens`.
 `how_found` says what work found it (reads, SQL, Logfire, code paths), not a session-share token formula. Report-only — omit from `write_knowledge`.
+`investigation_lines` is the same START-END passed to `compare_tokens.py --from-digest --lines`. Required on every candidate or the HTML **Work to learn this** expander is blank. Report-only — omit from `write_knowledge`.
 
 Use the same `BACKFILL_BRANCH` for every candidate in the run. Do **not** use
 the checkout branch or a per-log branch name.
@@ -201,7 +203,7 @@ one shape.
 ### Step 4a — Default: write + savings
 
 For each payload, call MCP `write_knowledge` with `title` / `content` / `repo` /
-`branch` / `tags` (omit helper fields like `approx_rediscovery_tokens`, `plain_english`, and `how_found`). Every
+`branch` / `tags` (omit helper fields like `approx_rediscovery_tokens`, `plain_english`, `how_found`, and `investigation_lines`). Every
 write must use `BACKFILL_BRANCH`. The server auto-enqueues notes-upflow for
 `dosu/log-backfill/*` (same step as a PR merge) — no separate promote call.
 
@@ -293,6 +295,7 @@ Agent instructions so a harvest does not under-count:
 4. Bootstrap-only sessions are excluded from the default 50 by the parser; skip them if they appear.
 5. If the Library already has the page (this run's `read_knowledge`), skip the write; status `already_in_library` is OK.
 6. The HTML baseline is inventory `learning_tokens`, not `effective_tokens` or `context_tokens` alone.
+7. Every candidate must include `investigation_lines` and the report must be generated with `--digest-dir /tmp` (digests left on disk). Without both, **Work to learn this** is blank — `how_found` is not a substitute.
 
 ## Guardrails
 

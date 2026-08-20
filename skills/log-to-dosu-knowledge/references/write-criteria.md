@@ -31,6 +31,7 @@ a human approval table unless the user asked for dry-run.
 - **title**: noun phrase topic (`page_version UniqueViolation race`), not a sentence
 - **content**: self-contained observation in plain language; include file/path pointers when useful
 - **plain_english** / **how_found**: report helpers (plain-English takeaway and what work found it). Not sent to write_knowledge.
+- **investigation_lines**: same START-END as `compare_tokens.py --from-digest --lines` (e.g. `128-131`). Required for the HTML **Work to learn this** expander. Not sent to write_knowledge.
 - **repo**: literal `git remote get-url origin`
 - **branch**: always the run’s synthetic `dosu/log-backfill/<UTC-YYYYMMDD-HHMMSS>` —
   never the checkout branch, never a per-session git branch from the log, and
@@ -89,3 +90,4 @@ Do not say "durable" to the customer. Follow these so harvests do not under-coun
 7. Cap dumps: `investigation_lines` is THIS fact only; if `compare_tokens` is
    > ~12k, tighten to the last 2–4 conclusion lines — do not attribute a
    SQL/log dump to every nearby fact.
+8. Every candidate must include `investigation_lines` and the report must be generated with `--digest-dir /tmp` (digests left on disk). Without both, **Work to learn this** is blank — `how_found` is not a substitute.
