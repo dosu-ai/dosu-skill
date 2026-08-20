@@ -18,7 +18,6 @@ Candidates schema:
   "candidates": [
     {
       "transcript_id": "<id>",
-      "source": "cursor|claude|codex",
       "title": "OAuth refresh token expiry",
       "content": "self-contained note body…",
       "approx_rediscovery_tokens": 12000,
@@ -50,6 +49,7 @@ import argparse
 import html
 import json
 import re
+import subprocess
 import sys
 import webbrowser
 from collections import Counter
@@ -292,6 +292,60 @@ def load_digest(
     return data
 
 
+def materialize_digest(
+    digest_dir: Path | None,
+    transcript_id: str,
+    cache: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Load digest-<id>.json, or rebuild it via parse_agent_logs.py."""
+    found = load_digest(digest_dir, transcript_id, cache)
+    if found:
+        return found
+    tid = (transcript_id or "").strip()
+    if not tid:
+        return None
+    script = Path(__file__).parent / "parse_agent_logs.py"
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--digest",
+                tid,
+                "--json",
+                "--all-projects",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        cache[tid] = None
+        return None
+    if proc.returncode != 0:
+        cache[tid] = None
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        cache[tid] = None
+        return None
+    if not isinstance(data, dict):
+        cache[tid] = None
+        return None
+    if digest_dir:
+        try:
+            digest_dir.mkdir(parents=True, exist_ok=True)
+            (digest_dir / f"digest-{tid}.json").write_text(
+                json.dumps(data, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+    cache[tid] = data
+    return data
+
+
 def expand_digest_turns(
     turns: list[dict[str, Any]], spec_lines: set[int]
 ) -> list[dict[str, Any]]:
@@ -397,6 +451,26 @@ def _tool_preview(tool: dict[str, Any], turn_text: str) -> str:
         if pv:
             return pv
 
+    query = tool.get("query")
+    if query:
+        pv = _collapse_preview(str(query))
+        if pv:
+            return pv
+
+    file_path = tool.get("file_path")
+    if file_path:
+        raw = str(file_path)
+        leaf = raw.rsplit("/", 1)[-1] if "/" in raw else raw
+        pv = _collapse_preview(leaf)
+        if pv:
+            return pv
+
+    prompt = tool.get("prompt")
+    if prompt:
+        pv = _collapse_preview(str(prompt))
+        if pv:
+            return pv
+
     knowledge = tool.get("knowledge")
     if isinstance(knowledge, dict):
         pv = _first_arg_preview(
@@ -469,6 +543,8 @@ def build_trace_steps(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
         text = _turn_text(turn)
         tools = _usable_tools(turn)
         if role == "user":
+            if not text:
+                continue
             steps.append(
                 {
                     "kind": "user",
@@ -525,7 +601,9 @@ def render_trace_html(
     cache: dict[str, Any],
 ) -> str:
     spec = parse_line_spec(candidate.get("investigation_lines"))
-    digest = load_digest(digest_dir, str(candidate.get("transcript_id") or ""), cache)
+    digest = materialize_digest(
+        digest_dir, str(candidate.get("transcript_id") or ""), cache
+    )
     if not digest:
         return ""
     if not spec:
@@ -770,7 +848,6 @@ def build_report(
 <article class="card" id="c-{i}">
   <header>
     <span class="badge status-{esc(status)}">{esc(status)}</span>
-    <span class="badge">{esc(c.get("source") or "?")}</span>
     <h3>{esc(c.get("title") or "Untitled")}</h3>
   </header>
   <p class="meta">
@@ -1167,18 +1244,106 @@ def build_report(
 """
 
 
+def run_self_test() -> int:
+    import tempfile
+
+    spec = fallback_line_spec([{"line": 3}, {"line": 10}])
+    assert spec == {3, 4, 5, 6, 7, 8, 9, 10}
+    assert fallback_line_spec([]) == set()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        digest_dir = Path(tmp)
+        tid = "self-test-digest"
+        digest = {
+            "turns": [
+                {
+                    "role": "user",
+                    "line": 1,
+                    "est_tokens": 12,
+                    "text": ["why does auth retry?"],
+                    "tools": [],
+                },
+                {
+                    "role": "assistant",
+                    "line": 2,
+                    "est_tokens": 40,
+                    "text": [],
+                    "tools": [{"name": "Read", "path": "src/auth.py"}],
+                },
+            ]
+        }
+        (digest_dir / f"digest-{tid}.json").write_text(
+            json.dumps(digest), encoding="utf-8"
+        )
+        html_out = render_trace_html({"transcript_id": tid}, digest_dir, {})
+        assert "Work to learn this" in html_out
+
+    with tempfile.TemporaryDirectory() as tmp:
+        html_out = render_trace_html(
+            {"transcript_id": "__no_such_transcript_zzzzzzzzzzzz__"},
+            Path(tmp),
+            {},
+        )
+        assert html_out == ""
+
+    steps = build_trace_steps(
+        [
+            {
+                "role": "user",
+                "text": ["look at datadog orgs"],
+                "tools": [],
+                "est_tokens": 8,
+            },
+            {
+                "role": "assistant",
+                "text": [],
+                "tools": [
+                    {
+                        "name": "mcp__supabase__execute_sql",
+                        "query": "select org_id, name from orgs ilike '%datadog%';",
+                        "arguments": {
+                            "query": "select org_id, name from orgs ilike '%datadog%';"
+                        },
+                    }
+                ],
+                "est_tokens": 40,
+            },
+            {
+                "role": "user",
+                "text": [],
+                "tools": [{"name": "tool_result"}],
+                "est_tokens": 12790,
+            },
+            {
+                "role": "assistant",
+                "text": [],
+                "tools": [{"name": "Read", "file_path": "/tmp/smoke.py", "path": "/tmp/smoke.py"}],
+                "est_tokens": 12,
+            },
+        ]
+    )
+    labels = [s["label"] for s in steps]
+    assert labels == ["Question", "SQL", "Read"], labels
+    assert "No input recorded" not in {s["preview"] for s in steps}
+    assert "datadog" in steps[1]["preview"]
+    assert "smoke.py" in steps[2]["preview"]
+
+    print("self-test OK")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--inventory", type=Path, required=True)
+    parser.add_argument("--inventory", type=Path, default=None)
     parser.add_argument("--candidates", type=Path, default=None)
     parser.add_argument("--token-report", type=Path, default=None)
     parser.add_argument("--pending", type=Path, default=None)
     parser.add_argument("--org-name", type=str, default=None)
     parser.add_argument("--repo", type=str, default=None)
     parser.add_argument("--branch", type=str, default=None)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=None)
     parser.add_argument(
         "--digest-dir",
         type=Path,
@@ -1191,7 +1356,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="label missing-status candidates as proposed (dry-run HTML; default path assumes written)",
     )
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.self_test:
+        return run_self_test()
+    if args.inventory is None or args.out is None:
+        parser.error("--inventory and --out are required unless using --self-test")
 
     inventory = load_json(args.inventory)
     candidates = load_json(args.candidates) if args.candidates else None

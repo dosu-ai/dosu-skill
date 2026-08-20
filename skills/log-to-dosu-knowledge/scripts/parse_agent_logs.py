@@ -1045,7 +1045,7 @@ def _digest_cursor(path: Path, *, max_assistant_chars: int) -> list[dict[str, An
             content = (obj.get("message") or {}).get("content")
             if not isinstance(content, list):
                 continue
-            texts, tools = _blocks_to_digest(
+            texts, tools, result_chars = _blocks_to_digest(
                 content, max_assistant_chars if role == "assistant" else 2000
             )
             if role == "user" and texts:
@@ -1058,9 +1058,7 @@ def _digest_cursor(path: Path, *, max_assistant_chars: int) -> list[dict[str, An
                         "role": role,
                         "text": texts,
                         "tools": tools,
-                        "est_tokens": estimate_tokens(
-                            "\n".join(texts) + json.dumps(tools, default=str)
-                        ),
+                        "est_tokens": _digest_est_tokens(texts, tools, result_chars),
                     }
                 )
     return turns
@@ -1087,7 +1085,7 @@ def _digest_claude(path: Path, *, max_assistant_chars: int) -> list[dict[str, An
             if not isinstance(content, list):
                 continue
             # Skip pure tool_result user rows in digest text focus — still show tools
-            texts, tools = _blocks_to_digest(
+            texts, tools, result_chars = _blocks_to_digest(
                 content, max_assistant_chars if etype == "assistant" else 2000
             )
             if etype == "user" and texts:
@@ -1100,9 +1098,7 @@ def _digest_claude(path: Path, *, max_assistant_chars: int) -> list[dict[str, An
                         "role": etype,
                         "text": texts,
                         "tools": tools,
-                        "est_tokens": estimate_tokens(
-                            "\n".join(texts) + json.dumps(tools, default=str)
-                        ),
+                        "est_tokens": _digest_est_tokens(texts, tools, result_chars),
                     }
                 )
     return turns
@@ -1166,6 +1162,39 @@ def _digest_codex(path: Path, *, max_assistant_chars: int) -> list[dict[str, Any
 
 
 _MCP_DIGEST_TOOLS = frozenset({"CallMcpTool", "GetMcpTools"})
+_TOOL_INPUT_KEYS = ("path", "file_path", "pattern", "command", "query", "prompt")
+
+
+def _digest_est_tokens(
+    texts: list[str], tools: list[dict[str, Any]], result_chars: int
+) -> int:
+    countable = [t for t in tools if t.get("name") != "tool_result"]
+    payload = "\n".join(texts)
+    if countable:
+        payload += json.dumps(countable, default=str)
+    tokens = estimate_tokens(payload)
+    if result_chars > 0:
+        tokens += max(1, round(result_chars / CHARS_PER_TOKEN))
+    return int(tokens)
+
+
+def _copy_tool_input_fields(entry: dict[str, Any], inp: Any) -> None:
+    if not isinstance(inp, dict):
+        return
+    if "path" in inp:
+        entry["path"] = inp.get("path")
+    if "file_path" in inp:
+        entry["file_path"] = inp.get("file_path")
+        entry.setdefault("path", inp.get("file_path"))
+    if "pattern" in inp:
+        entry["pattern"] = inp.get("pattern")
+    if "command" in inp:
+        entry["command_preview"] = str(inp.get("command"))[:160]
+    if "prompt" in inp:
+        entry["prompt"] = str(inp.get("prompt"))[:160]
+        entry.setdefault("command_preview", entry["prompt"])
+    if "query" in inp:
+        entry["query"] = inp.get("query")
 
 
 def _copy_mcp_digest_fields(
@@ -1174,7 +1203,12 @@ def _copy_mcp_digest_fields(
     """Copy MCP identity + args so the report can label non-knowledge calls."""
     if not isinstance(inp, dict):
         return
-    is_mcp = name in _MCP_DIGEST_TOOLS or bool(inp.get("toolName") or inp.get("server"))
+    name_s = name or ""
+    is_mcp = (
+        name in _MCP_DIGEST_TOOLS
+        or name_s.startswith("mcp__")
+        or bool(inp.get("toolName") or inp.get("server"))
+    )
     if not is_mcp:
         return
     tool_name = inp.get("toolName") or inp.get("tool_name")
@@ -1188,13 +1222,16 @@ def _copy_mcp_digest_fields(
     args = inp.get("arguments")
     if isinstance(args, dict):
         entry["arguments"] = args
+    elif name_s.startswith("mcp__"):
+        entry["arguments"] = inp
 
 
 def _blocks_to_digest(
     content: list[Any], max_text_chars: int
-) -> tuple[list[str], list[dict[str, Any]]]:
+) -> tuple[list[str], list[dict[str, Any]], int]:
     texts: list[str] = []
     tools: list[dict[str, Any]] = []
+    result_chars = 0
     for block in content:
         if not isinstance(block, dict):
             continue
@@ -1211,18 +1248,18 @@ def _blocks_to_digest(
             kcall = _knowledge_from_name_and_input(name, inp)
             if kcall:
                 entry["knowledge"] = kcall
-            elif isinstance(inp, dict):
-                if "path" in inp:
-                    entry["path"] = inp.get("path")
-                if "pattern" in inp:
-                    entry["pattern"] = inp.get("pattern")
-                if "command" in inp:
-                    entry["command_preview"] = str(inp.get("command"))[:160]
+            _copy_tool_input_fields(entry, inp)
             _copy_mcp_digest_fields(entry, name, inp)
             tools.append(entry)
         elif btype == "tool_result":
+            content_val = block.get("content")
+            if content_val:
+                if isinstance(content_val, str):
+                    result_chars += len(content_val)
+                else:
+                    result_chars += len(json.dumps(content_val, default=str))
             tools.append({"name": "tool_result"})
-    return texts, tools
+    return texts, tools, result_chars
 
 
 # ---------------------------------------------------------------------------
@@ -1749,7 +1786,7 @@ def run_self_test() -> int:
         ]
         assert is_bootstrap_only_session(cli_handoff)
 
-        _, mcp_tools = _blocks_to_digest(
+        _, mcp_tools, _ = _blocks_to_digest(
             [
                 {
                     "type": "tool_use",
@@ -1786,6 +1823,41 @@ def run_self_test() -> int:
         assert mcp_tools[2]["knowledge"]["tool"] == "read_knowledge"
         assert mcp_tools[2]["toolName"] == "read_knowledge"
         assert mcp_tools[2]["arguments"]["query"] == "UniqueViolation"
+
+        texts, claude_mcp, result_chars = _blocks_to_digest(
+            [
+                {
+                    "type": "tool_use",
+                    "name": "mcp__supabase__execute_sql",
+                    "input": {
+                        "query": "select org_id, name from orgs where name ilike '%datadog%';"
+                    },
+                },
+                {
+                    "type": "tool_use",
+                    "name": "Read",
+                    "input": {"file_path": "/Users/me/backend/foo.py"},
+                },
+                {
+                    "type": "tool_use",
+                    "name": "Agent",
+                    "input": {"prompt": "find the UniqueViolation handler"},
+                },
+                {
+                    "type": "tool_result",
+                    "content": "x" * 400,
+                },
+            ],
+            200,
+        )
+        assert claude_mcp[0]["query"].startswith("select org_id")
+        assert claude_mcp[0]["arguments"]["query"].startswith("select org_id")
+        assert claude_mcp[1]["path"].endswith("foo.py")
+        assert claude_mcp[1]["file_path"].endswith("foo.py")
+        assert "find the UniqueViolation" in claude_mcp[2]["prompt"]
+        assert claude_mcp[3]["name"] == "tool_result"
+        assert result_chars == 400
+        assert _digest_est_tokens([], [claude_mcp[3]], 400) >= 100
 
         print("self-test OK")
         print(
