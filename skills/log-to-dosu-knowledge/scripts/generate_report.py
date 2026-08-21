@@ -1232,7 +1232,7 @@ def build_report(
       <p>{esc(footer_body)}</p>
       <p class="meta">
         Print tip: use <strong>Print / Save as PDF</strong> above (or ⌘P / Ctrl+P).
-        Logs never leave the engineer’s machine in this local flow — only note text is written to Dosu.
+        Session logs stay between you and your agent — only note text is written to Dosu.
       </p>
       <div class="toolbar no-print">
         <button type="button" onclick="window.print()">Print / Save as PDF</button>
