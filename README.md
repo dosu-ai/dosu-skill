@@ -16,6 +16,7 @@ This installs **both** skills from this repo:
 |-------|---------|
 | `dosu` | Use the Dosu platform (ask, docs, threads, …) |
 | `log-to-dosu-knowledge` | Mine local agent logs → `write_knowledge` → cached notes + expected savings |
+| `read-knowledge-impact` | Audit local logs for `read_knowledge` highlights and failures → HTML report |
 
 ### Via Skills CLI
 
@@ -33,7 +34,8 @@ Once installed, agents can:
 - **Import docs** from GitHub, GitLab, Confluence, Notion, Coda (`dosu docs import`)
 - **Check analytics** and team activity (`dosu analytics`)
 - **Manage team members** and integrations (`dosu members`, `dosu integrations`)
-- **Mine local Cursor / Claude Code / Codex histories** into Branch Notes (`log-to-dosu-knowledge`)
+- **Mine local Cursor / Claude Code / Codex histories** into Branch Notes (`log-to-dosu-knowledge`; Devin CLI paths documented)
+- **Audit `read_knowledge` impact** on recent agent trajectories (`read-knowledge-impact`)
 
 ## Prerequisites
 
