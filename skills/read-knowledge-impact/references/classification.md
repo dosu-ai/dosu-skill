@@ -42,7 +42,7 @@ Do not mark `relevant` just because `read_knowledge` was called. Do not mark `of
 ## Card copy (highlights and failures)
 
 - **task** — what the user asked / the agent was doing (noun phrase, no pasted prompt)
-- **knowledge** — what Dosu returned that mattered (or misled)
+- **knowledge** — what Dosu returned that mattered (or misled): name the source titles, one or two sentences, never the raw tool payload
 - **impact** — what it had to do with the question and solution (or what it cost)
 
 Skip secrets, emails, tokens, and raw user prompts.

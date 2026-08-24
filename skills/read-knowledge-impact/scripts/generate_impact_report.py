@@ -160,9 +160,7 @@ def card_knowledge(call: dict[str, Any]) -> str:
         if query.startswith(stripped) or stripped.startswith(query[:40]):
             if len(query) > len(stripped) or _looks_cut_off(knowledge):
                 knowledge = query
-    if knowledge and preview and _looks_cut_off(knowledge) and len(preview) > len(knowledge):
-        knowledge = preview
-    return _longest(knowledge, query, preview)
+    return knowledge or query or preview
 
 
 def card_impact(call: dict[str, Any]) -> str:
@@ -500,6 +498,30 @@ def _self_test() -> None:
     month = build_report({"window": {"days": 30, "start": "2026-07-22", "end": "2026-08-21"}, "calls": []})
     assert "calls in 30 days" in month
     assert "last 30 days" in month
+
+    preview = '{"result":"<search_results>\\n<source title=\\"Hotspots\\">"}' + (" x" * 200)
+    preview = preview[:400]
+    summary = "Production Performance Hotspots: update_page timeouts kill the nested agent."
+    query = "Why does a trivial agent tool call take two seconds?"
+    call = {
+        "knowledge": summary,
+        "query": query,
+        "result_preview": preview,
+    }
+    assert card_knowledge(call) == summary
+    assert card_knowledge({**call, "knowledge": summary.rstrip(".")}) == summary.rstrip(".")
+    assert card_knowledge({**call, "knowledge": ""}) == query
+    assert card_knowledge({"result_preview": preview}) == preview
+    assert (
+        card_knowledge(
+            {
+                "knowledge": "Team knowledge on: Why does a trivial",
+                "query": query,
+                "result_preview": preview,
+            }
+        )
+        == query
+    )
 
 
 if __name__ == "__main__":
