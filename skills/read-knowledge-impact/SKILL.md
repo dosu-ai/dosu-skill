@@ -175,6 +175,8 @@ python3 "$SKILL_DIR/scripts/generate_impact_report.py" \
 
 The generator asserts that every highlight has a working **Review session** viewer (a `session_view` with turns) and exits with an error otherwise — fix the findings, do not strip the field.
 
+Off-topic, empty, and rejected calls are not hidden: they render in a collapsed **No effect** section at the bottom, each with its own Review session viewer, so a no-effect label can be audited the same way a highlight can.
+
 Reply with the headline numbers (calls, % relevant, highlight count, failure count) and that the HTML is open. Do not paste every card into chat.
 
 ## Guardrails

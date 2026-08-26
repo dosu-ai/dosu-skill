@@ -133,6 +133,19 @@ VIEWER_CSS = """
   .sv-copy:hover, .sv-copy:focus-visible { border-color: var(--good); color: var(--good); }
   .sv-note { color: var(--waste); font-size: 0.78rem; padding: 0.4rem 0.1rem; }
   .card-actions { margin-top: 0.7rem; }
+  details.section-fold { margin-top: 2.2rem; }
+  details.section-fold > summary {
+    cursor: pointer; list-style: none; display: flex;
+    align-items: baseline; gap: 0.6rem;
+  }
+  details.section-fold > summary::-webkit-details-marker { display: none; }
+  details.section-fold > summary .section-title {
+    font-size: 1.05rem; font-weight: 600;
+  }
+  details.section-fold > summary::before {
+    content: '\\25B8'; color: #8a8a8a; font-size: 0.8rem;
+  }
+  details.section-fold[open] > summary::before { content: '\\25BE'; }
 """
 
 VIEWER_JS = """<script>
@@ -401,14 +414,25 @@ def fold_dd(label: str, text: str) -> str:
     )
 
 
-def cards_for(calls: list[dict[str, Any]], outcomes: set[str], heading: str) -> str:
+def cards_for(
+    calls: list[dict[str, Any]],
+    outcomes: set[str],
+    heading: str,
+    *,
+    collapsed: bool = False,
+) -> str:
     rows = [c for c in calls if (c.get("outcome") or c.get("hint")) in outcomes]
     if not rows:
         return ""
     articles = []
     for i, c in enumerate(rows):
         outcome = _raw_outcome(c)
-        tone = "good" if outcome in LEGACY_RELEVANT or outcome == "relevant" else "bad"
+        if outcome in LEGACY_RELEVANT:
+            tone = "good"
+        elif outcome in WASTE:
+            tone = "bad"
+        else:
+            tone = "neutral"
         review_btn, review_dialog = session_view_html(c, f"{heading}-{i}")
         articles.append(
             f"""
@@ -424,6 +448,15 @@ def cards_for(calls: list[dict[str, Any]], outcomes: set[str], heading: str) -> 
   {review_dialog}
 </article>
 """
+        )
+    if collapsed:
+        return (
+            "<details class='section-fold'>"
+            f"<summary><span class='section-title'>{esc(heading)}</span> "
+            f"<span class='muted'>{len(rows)} calls — expand to review each "
+            "session</span></summary>"
+            + "".join(articles)
+            + "</details>"
         )
     return f"<h2>{esc(heading)}</h2>" + "".join(articles)
 
@@ -679,6 +712,7 @@ def build_report(doc: dict[str, Any], *, days_override: int | None = None) -> st
   </table>
   {cards_for(calls, {HIGHLIGHT}, "Highlights")}
   {cards_for(calls, set(WASTE), "Failures")}
+  {cards_for(calls, set(NO_EFFECT), "No effect", collapsed=True)}
   <p class="foot">Generated {esc(generated)} · {esc(source_bits)} · classified from local agent transcripts</p>
 </div>
 {VIEWER_JS}
@@ -769,6 +803,10 @@ def _self_test() -> None:
     # Action turns render their sanitized input and output previews.
     assert "pytest tests/flaky -x" in html_out
     assert "1 passed in 0.42s" in html_out
+    # No-effect calls get their own collapsed, reviewable section.
+    assert "section-fold" in html_out
+    assert ">No effect</span>" in html_out
+    assert "1 calls" in html_out
 
     # Unrecoverable result → honest unavailable state, never the preview.
     no_result = {
