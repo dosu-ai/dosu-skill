@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import sys
 import webbrowser
 from collections import Counter
@@ -54,6 +55,235 @@ LABELS = {
 HIGHLIGHT = "relevant"
 WASTE = frozenset({"overflow", "error", "distracting"})
 NO_EFFECT = frozenset({"off_topic", "empty", "rejected"})
+
+RESULT_UNAVAILABLE = "Result payload unavailable in this log source."
+
+# Session-viewer chrome (see SKILL.md "Session viewer"). Self-contained:
+# native <dialog>, no network dependency, Escape-to-close for free.
+VIEWER_CSS = """
+  .sv-open {
+    background: #232323; border: 1px solid #333; color: #c8c8c8;
+    border-radius: 6px; font-size: 0.78rem; padding: 0.3rem 0.65rem;
+    cursor: pointer; font-family: inherit;
+  }
+  .sv-open:hover, .sv-open:focus-visible { border-color: var(--good); color: var(--good); }
+  dialog.sv {
+    width: min(760px, 92vw); max-height: 85vh; margin: auto;
+    background: #191919; color: var(--ink);
+    border: 1px solid #2e2e2e; border-radius: 10px; padding: 0;
+  }
+  dialog.sv::backdrop { background: rgba(0, 0, 0, 0.6); }
+  .sv-head {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 1rem; padding: 0.8rem 1rem; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: #191919;
+  }
+  .sv-close {
+    background: none; border: 1px solid #333; color: #c8c8c8;
+    border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+    padding: 0.15rem 0.55rem; line-height: 1.4;
+  }
+  .sv-close:hover, .sv-close:focus-visible { border-color: var(--waste); color: var(--waste); }
+  .sv-body { padding: 1rem; overflow-y: auto; max-height: calc(85vh - 3.4rem); outline: none; }
+  .sv-turn {
+    border: 1px solid #262626; border-radius: 8px;
+    padding: 0.6rem 0.8rem; margin: 0.55rem 0; font-size: 0.85rem;
+  }
+  .sv-turn.sv-pinned { border-color: #3a4a6b; background: #171a21; }
+  .sv-turn.sv-hl { border-color: #245c42; background: #14211a; }
+  .sv-turn.sv-thinking { opacity: 0.72; }
+  .sv-role {
+    font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin-bottom: 0.3rem;
+  }
+  .sv-turn.sv-hl .sv-role { color: var(--good); }
+  .sv-turn.sv-pinned .sv-role { color: #8ab0e8; }
+  .sv-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sv-action {
+    color: var(--muted); font-size: 0.75rem; border-style: dashed;
+    padding: 0.35rem 0.8rem;
+  }
+  .sv-io {
+    margin: 0.3rem 0 0; padding: 0.4rem 0.55rem;
+    background: #101010; border-radius: 5px;
+    font-size: 0.72rem; line-height: 1.4;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #b9b9b9; max-height: 140px; overflow: auto;
+  }
+  .sv-io-out { color: #8f8f8f; border-left: 2px solid #2e2e2e; }
+  .sv-gap { text-align: center; color: var(--muted); font-size: 0.75rem; margin: 0.4rem 0; }
+  .sv-block { margin: 0.5rem 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .sv-block-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.3rem 0.6rem; background: #202020; font-size: 0.68rem;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+  }
+  .sv-block pre {
+    margin: 0; padding: 0.6rem; max-height: 320px; overflow: auto;
+    font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .sv-copy {
+    background: none; border: 1px solid #333; color: #c8c8c8;
+    border-radius: 4px; font-size: 0.68rem; padding: 0.1rem 0.45rem;
+    cursor: pointer; font-family: inherit; text-transform: none; letter-spacing: 0;
+  }
+  .sv-copy:hover, .sv-copy:focus-visible { border-color: var(--good); color: var(--good); }
+  .sv-note { color: var(--waste); font-size: 0.78rem; padding: 0.4rem 0.1rem; }
+  .card-actions { margin-top: 0.7rem; }
+  details.section-fold { margin-top: 2.2rem; }
+  details.section-fold > summary {
+    cursor: pointer; list-style: none; display: flex;
+    align-items: baseline; gap: 0.6rem;
+  }
+  details.section-fold > summary::-webkit-details-marker { display: none; }
+  details.section-fold > summary .section-title {
+    font-size: 1.05rem; font-weight: 600;
+  }
+  details.section-fold > summary::before {
+    content: '\\25B8'; color: #8a8a8a; font-size: 0.8rem;
+  }
+  details.section-fold[open] > summary::before { content: '\\25BE'; }
+"""
+
+VIEWER_JS = """<script>
+(function () {
+  function fallbackCopy(pre) {
+    var range = document.createRange();
+    range.selectNodeContents(pre);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    try { document.execCommand('copy'); } catch (err) {}
+    sel.removeAllRanges();
+  }
+  document.addEventListener('click', function (e) {
+    var opener = e.target.closest('.sv-open');
+    if (opener) {
+      var dlg = document.getElementById(opener.getAttribute('data-sv'));
+      if (dlg) {
+        dlg.showModal();
+        var body = dlg.querySelector('.sv-body');
+        if (body) body.focus();
+      }
+      return;
+    }
+    var copy = e.target.closest('.sv-copy');
+    if (copy) {
+      var pre = copy.closest('.sv-block').querySelector('pre');
+      var text = pre ? pre.innerText : '';
+      var done = function () {
+        copy.textContent = 'Copied';
+        setTimeout(function () { copy.textContent = 'Copy'; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(pre); done(); });
+      } else { fallbackCopy(pre); done(); }
+      return;
+    }
+    var dlg2 = e.target.closest('dialog.sv');
+    if (dlg2 && e.target === dlg2) dlg2.close();
+  });
+  // Escape closes the viewer even where the native <dialog> cancel is
+  // suppressed (some embedded browser panes).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    var open = document.querySelector('dialog.sv[open]');
+    if (open) { open.close(); e.preventDefault(); }
+  });
+})();
+</script>"""
+
+
+def _sv_turn_html(turn: dict[str, Any]) -> str:
+    kind = turn.get("kind")
+    if kind == "gap":
+        return "<div class='sv-gap'>⋯ turns omitted ⋯</div>"
+    if kind == "action":
+        name = esc(turn.get("text"))
+        inp = turn.get("input")
+        out = turn.get("output")
+        if not inp and not out:
+            return f"<div class='sv-turn sv-action'>→ {name}</div>"
+        bits = [f"<div class='sv-turn sv-action'><div class='sv-role'>→ {name}</div>"]
+        if inp:
+            bits.append(f"<pre class='sv-io'>{esc(inp)}</pre>")
+        if out:
+            bits.append(
+                f"<pre class='sv-io sv-io-out'>{esc(out)}</pre>"
+            )
+        bits.append("</div>")
+        return "".join(bits)
+    if kind == "read_knowledge":
+        hl = bool(turn.get("highlighted"))
+        cls = "sv-turn sv-hl" if hl else "sv-turn"
+        role = "read_knowledge — this call" if hl else "read_knowledge"
+        parts = [f"<div class='{cls}'>", f"<div class='sv-role'>{esc(role)}</div>"]
+        parts.append(
+            "<div class='sv-block'><div class='sv-block-head'><span>Query</span>"
+            "<button class='sv-copy' type='button'>Copy</button></div>"
+            f"<pre>{esc(turn.get('query') or '—')}</pre></div>"
+        )
+        result = turn.get("result")
+        if turn.get("result_available") and result:
+            note = (
+                "<div class='sv-note'>Long result truncated for display.</div>"
+                if turn.get("result_truncated")
+                else ""
+            )
+            parts.append(
+                "<div class='sv-block'><div class='sv-block-head'>"
+                "<span>Knowledge returned</span>"
+                "<button class='sv-copy' type='button'>Copy</button></div>"
+                f"<pre>{esc(result)}</pre></div>{note}"
+            )
+        elif hl:
+            parts.append(f"<div class='sv-note'>{esc(RESULT_UNAVAILABLE)}</div>")
+        parts.append("</div>")
+        return "".join(parts)
+    role = turn.get("role") or ""
+    pinned = bool(turn.get("pinned"))
+    cls = f"sv-turn sv-{esc(role)}"
+    label = {"user": "User", "assistant": "Agent"}.get(role, role or "…")
+    if kind == "thinking":
+        cls += " sv-thinking"
+        label = "Agent · reasoning"
+    if pinned:
+        cls += " sv-pinned"
+        label = "Task"
+    return (
+        f"<div class='{cls}'><div class='sv-role'>{esc(label)}</div>"
+        f"<div class='sv-text'>{esc(turn.get('text'))}</div></div>"
+    )
+
+
+def session_view_html(call: dict[str, Any], fallback_id: str) -> tuple[str, str]:
+    """(Review-session button, <dialog>) for one call — ('', '') without a view."""
+    view = call.get("session_view") or {}
+    turns = view.get("turns") or []
+    if not turns:
+        return "", ""
+    dialog_id = "sv-" + re.sub(r"[^A-Za-z0-9_-]+", "-", str(call.get("id") or fallback_id))
+    button = (
+        "<div class='card-actions'>"
+        f"<button class='sv-open' type='button' data-sv='{dialog_id}'>Review session</button>"
+        "<noscript><span class='sv-note'>Viewer needs JavaScript — open this"
+        " report in a browser.</span></noscript>"
+        "</div>"
+    )
+    # Identify source and session only — never raw filesystem paths.
+    ident = f"{esc(call.get('source') or '?')} · {esc(call.get('transcript_id') or 'session')}"
+    body = "".join(_sv_turn_html(t) for t in turns)
+    dialog = (
+        f"<dialog class='sv' id='{dialog_id}' aria-label='Session transcript'>"
+        "<div class='sv-head'><div><strong>Session review</strong> "
+        f"<span class='muted'>{ident}</span></div>"
+        "<form method='dialog'><button class='sv-close' aria-label='Close'>✕</button></form>"
+        f"</div><div class='sv-body' tabindex='0'>{body}</div></dialog>"
+    )
+    return button, dialog
 
 
 def esc(value: Any) -> str:
@@ -184,14 +414,26 @@ def fold_dd(label: str, text: str) -> str:
     )
 
 
-def cards_for(calls: list[dict[str, Any]], outcomes: set[str], heading: str) -> str:
+def cards_for(
+    calls: list[dict[str, Any]],
+    outcomes: set[str],
+    heading: str,
+    *,
+    collapsed: bool = False,
+) -> str:
     rows = [c for c in calls if (c.get("outcome") or c.get("hint")) in outcomes]
     if not rows:
         return ""
     articles = []
-    for c in rows:
+    for i, c in enumerate(rows):
         outcome = _raw_outcome(c)
-        tone = "good" if outcome in LEGACY_RELEVANT or outcome == "relevant" else "bad"
+        if outcome in LEGACY_RELEVANT:
+            tone = "good"
+        elif outcome in WASTE:
+            tone = "bad"
+        else:
+            tone = "neutral"
+        review_btn, review_dialog = session_view_html(c, f"{heading}-{i}")
         articles.append(
             f"""
 <article class="card {tone}">
@@ -201,9 +443,20 @@ def cards_for(calls: list[dict[str, Any]], outcomes: set[str], heading: str) -> 
     {fold_dd("knowledge", card_knowledge(c))}
     {fold_dd("impact", card_impact(c))}
   </dl>
+  {review_btn}
   <p class="meta">{esc(c.get("source"))} · {esc(c.get("transcript_id") or "")}</p>
+  {review_dialog}
 </article>
 """
+        )
+    if collapsed:
+        return (
+            "<details class='section-fold'>"
+            f"<summary><span class='section-title'>{esc(heading)}</span> "
+            f"<span class='muted'>{len(rows)} calls — expand to review each "
+            "session</span></summary>"
+            + "".join(articles)
+            + "</details>"
         )
     return f"<h2>{esc(heading)}</h2>" + "".join(articles)
 
@@ -270,6 +523,21 @@ def window_labels(days: int) -> tuple[str, str, str]:
 
 def build_report(doc: dict[str, Any], *, days_override: int | None = None) -> str:
     calls = list(doc.get("calls") or [])
+    # Session-viewer contract: every highlight must open a working viewer.
+    missing = [
+        c
+        for c in calls
+        if _raw_outcome(c) == "relevant"
+        and not ((c.get("session_view") or {}).get("turns"))
+    ]
+    if missing:
+        ids = ", ".join(str(c.get("id") or "?") for c in missing[:5])
+        raise SystemExit(
+            f"{len(missing)} highlight call(s) missing session_view.turns "
+            f"(e.g. {ids}). Re-run extract_read_knowledge.py and carry "
+            "session_view into the findings — every highlight needs a "
+            "working Review session viewer."
+        )
     stats = summarize(calls)
     window = resolve_window(doc, days_override=days_override)
     start = window["start"]
@@ -420,6 +688,7 @@ def build_report(doc: dict[str, Any], *, days_override: int | None = None) -> st
   details.fold .full {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
   .meta {{ color: var(--muted); font-size: 0.75rem; margin: 0.7rem 0 0; }}
   .foot {{ color: var(--muted); font-size: 0.75rem; margin-top: 2.5rem; }}
+{VIEWER_CSS}
 </style>
 </head>
 <body>
@@ -443,8 +712,10 @@ def build_report(doc: dict[str, Any], *, days_override: int | None = None) -> st
   </table>
   {cards_for(calls, {HIGHLIGHT}, "Highlights")}
   {cards_for(calls, set(WASTE), "Failures")}
+  {cards_for(calls, set(NO_EFFECT), "No effect", collapsed=True)}
   <p class="foot">Generated {esc(generated)} · {esc(source_bits)} · classified from local agent transcripts</p>
 </div>
+{VIEWER_JS}
 </body>
 </html>
 """
@@ -476,9 +747,36 @@ def main(argv: list[str] | None = None) -> int:
 
 def _self_test() -> None:
     now = datetime.now(tz=UTC)
+    sample_view = {
+        "result_available": True,
+        "turns": [
+            {"role": "user", "kind": "message", "text": "fix the flaky test", "pinned": True},
+            {
+                "role": "assistant",
+                "kind": "read_knowledge",
+                "query": "flaky test retry conventions",
+                "result": "Retries are configured in conftest.py.",
+                "result_available": True,
+                "highlighted": True,
+            },
+            {
+                "role": "assistant",
+                "kind": "action",
+                "text": "Bash",
+                "input": "pytest tests/flaky -x",
+                "output": "1 passed in 0.42s",
+            },
+            {"role": "assistant", "kind": "message", "text": "Using the conftest retry hook."},
+        ],
+    }
     missing_window = {
         "calls": [
-            {"mtime": now.isoformat(), "outcome": "relevant", "source": "cursor"},
+            {
+                "mtime": now.isoformat(),
+                "outcome": "relevant",
+                "source": "cursor",
+                "session_view": sample_view,
+            },
             {
                 "mtime": (now - timedelta(hours=5)).isoformat(),
                 "outcome": "empty",
@@ -493,6 +791,55 @@ def _self_test() -> None:
     assert "across the last day of agent sessions" in html_out
     assert "30 days" not in html_out
     assert "a month" not in html_out
+
+    # Session viewer: button + dialog + pinned/highlighted turns + copy chrome.
+    assert "Review session" in html_out
+    assert "dialog class='sv'" in html_out
+    assert "flaky test retry conventions" in html_out
+    assert "Retries are configured in conftest.py." in html_out
+    assert "sv-pinned" in html_out and "sv-hl" in html_out
+    assert html_out.count("sv-copy") >= 2
+    assert RESULT_UNAVAILABLE not in html_out
+    # Action turns render their sanitized input and output previews.
+    assert "pytest tests/flaky -x" in html_out
+    assert "1 passed in 0.42s" in html_out
+    # No-effect calls get their own collapsed, reviewable section.
+    assert "section-fold" in html_out
+    assert ">No effect</span>" in html_out
+    assert "1 calls" in html_out
+
+    # Unrecoverable result → honest unavailable state, never the preview.
+    no_result = {
+        "calls": [
+            {
+                "outcome": "relevant",
+                "source": "cursor",
+                "result_preview": "preview text that is NOT complete",
+                "session_view": {
+                    "result_available": False,
+                    "turns": [
+                        {
+                            "role": "assistant",
+                            "kind": "read_knowledge",
+                            "query": "q",
+                            "result": None,
+                            "result_available": False,
+                            "highlighted": True,
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+    assert RESULT_UNAVAILABLE in build_report(no_result)
+
+    # A highlight without a session_view must fail the build.
+    try:
+        build_report({"calls": [{"outcome": "relevant", "source": "cursor"}]})
+    except SystemExit as err:
+        assert "session_view" in str(err)
+    else:
+        raise AssertionError("highlight without session_view must fail")
     pinned = build_report({"window": {"days": 1, "start": "2026-08-20", "end": "2026-08-21"}, "calls": []})
     assert "calls in 1 day" in pinned
     month = build_report({"window": {"days": 30, "start": "2026-07-22", "end": "2026-08-21"}, "calls": []})
