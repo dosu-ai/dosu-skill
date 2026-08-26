@@ -1,158 +1,131 @@
-# Dosu CLI Workflow Examples
+# Dosu CLI workflows
 
-Real-world scenarios showing how to compose CLI commands.
+Use these patterns to compose commands. Replace placeholders with IDs read from JSON output; never guess them. See [commands.md](commands.md) for exact flags and choices.
 
-## Scenario 1: "Help me understand our codebase"
-
-A developer joins the team and wants to get up to speed.
+## Configure Dosu for a coding agent
 
 ```bash
-# Step 1: Ask a high-level question
-dosu ask "Give me a 5-minute mental model of this codebase: main services, request flow, where to start" --json
-
-# Step 2: Search for specific topics
-dosu knowledge search "authentication flow" --json
-dosu knowledge search "database schema" --json
-
-# Step 3: Read specific documents
-dosu docs list --search "getting started" --json
-dosu docs get <doc-id> --json
+dosu setup --agent --tool <tool-id>
 ```
 
-**Agent reasoning**: Start with `ask` for a synthesized answer, then use `knowledge search` to find source documents, then `docs get` for full content.
+Read every NDJSON event:
 
-## Scenario 2: "Create documentation for our API"
+1. On `need_user_action`, give the returned URL to the user and stop.
+2. After the user confirms sign-in, run the returned `resume_command` verbatim.
+3. On `pending`, wait for the user and repeat that command.
+4. On `multiple_deployments`, list MCP deployments, let the user choose, and retry with `--deployment <id>`.
+5. Treat `done` as setup completion, then verify with `dosu status --json`.
 
-The user wants to generate and organize new documentation.
+## Create a Library from existing sources
 
-```bash
-# Step 1: Generate AI documentation
-dosu docs generate --title "REST API Reference" --instructions "Cover all public endpoints, include request/response examples" --json
-
-# Step 2: Check AI suggestions for additional docs
-dosu suggest generate --json
-dosu suggest list --json
-dosu suggest accept <suggestion-id> --title "Authentication Guide" --json
-
-# Step 3: Organize with tags
-dosu tags create --name "api" --description "API documentation" --json
-dosu tags add <tag-id> <page-id> --json
-
-# Step 4: Publish to Confluence
-dosu docs publish <page-id> --to confluence --parent-page-id <confluence-parent> --data-source-id <ds-id> --json
-```
-
-**Agent reasoning**: AI generation is async (fire-and-forget). Follow up with `docs list` to find the generated document once ready.
-
-## Scenario 3: "Import and organize existing docs"
-
-The team has documentation scattered across GitHub and Notion.
+This works with any number or mix of organization sources.
 
 ```bash
-# Step 1: Check connected data sources
+# Discover connected sources and select exact IDs by provider/name.
 dosu sources list --json
 
-# Step 2: Import from GitHub
-dosu docs import github --files "file-id-1,file-id-2,file-id-3" --json
-# Returns: { "task_id": "..." }
+# Create the Library; capture its id.
+dosu libraries create --name "Incident Response" --visibility private --json
 
-# Step 3: Monitor import progress
+# The user's explicit request authorizes these exact attachments.
+dosu libraries sources attach <library-id> <repository-source-id> <handbook-source-id> \
+  --confirm --json
+
+# Verify the final state, not just mutation receipts.
+dosu libraries info <library-id> --json
+dosu libraries sources list <library-id> --json
+```
+
+Apply the connection and public-Library safety boundaries from [SKILL.md](../SKILL.md) before attaching.
+
+## Change an existing Library safely
+
+```bash
+dosu libraries list --json
+dosu libraries info <library-id> --json
+
+# Rename or change visibility only after the exact target/change is authorized.
+dosu libraries update <library-id> --name "Operations Handbook" --confirm --json
+
+# Read before changing one documentation setting.
+dosu libraries config get <library-id> --json
+dosu libraries config set <library-id> review_timeout_days --value 30 --confirm --json
+```
+
+## Create and configure an Agent
+
+```bash
+# Select a Library and an existing GitHub, GitLab, Slack, or Teams source.
+dosu libraries list --json
+dosu sources list --json
+
+dosu agents create --library <library-id> --source <source-id> \
+  --name "Repository Helper" --json
+
+dosu agents info <agent-id> --json
+dosu agents config get <agent-id> --json
+
+# Change one leaf only after reading the current structure.
+dosu agents config set <agent-id> issues.auto_reply.review_required \
+  --value true --confirm --json
+```
+
+To move the Agent, confirm the destination and verify the returned `space_id`:
+
+```bash
+dosu agents move <agent-id> --library <destination-library-id> --confirm --json
+```
+
+## Configure a Library source and Monitor
+
+```bash
+dosu libraries sources config get <library-id> <source-id> --json
+dosu libraries sources config update <library-id> <source-id> \
+  --include-patterns '["docs/**","*.md"]' \
+  --exclude-patterns '["archive/**"]' --confirm --json
+
+dosu libraries monitors list <library-id> --json
+dosu libraries monitors update <library-id> <source-id> \
+  --enabled on --paths '["docs/**"]' \
+  --up-to-date-behavior silent --confirm --json
+```
+
+## Find information and inspect its source
+
+```bash
+dosu ask "How is access control enforced?" --json
+dosu knowledge search "access control" --json
+dosu docs get <page-id> --json
+```
+
+Use `ask` for a synthesized answer. Use `knowledge search` and `docs get` when the user wants the underlying documents.
+
+## Import external documents
+
+```bash
+dosu sources list --json
+dosu docs import <platform> --files <comma-separated-ids> --json
 dosu docs import-status <task-id> --json
-# Repeat until status is "completed"
-
-# Step 4: Auto-tag imported documents
-dosu docs auto-tag <page-id> --json
-
-# Step 5: Trigger source re-sync to pick up latest changes
-dosu sources sync <source-id> --json
 ```
 
-**Agent reasoning**: Import is async. Poll `import-status` until done. The platform must already be connected via the web dashboard.
+Capture the returned task ID. Poll only when the user asked you to wait for completion.
 
-## Scenario 4: "Review and approve pending changes"
-
-Dosu queues document versions (AI-generated, user-edited, synced from source, API-created) and draft messages for human review. Work the queue directly with the `dosu review` commands. See [Review workflow](review-workflow.md) for the full flow and safety rules.
+## Review one pending item
 
 ```bash
-# Step 1: See what's pending — ID, Kind, Title, Source, Status, Created
 dosu review list --json
-
-# Step 2: Read the exact change before touching it
-dosu review diff <page-version-id> --json
-
-# Step 3 (optional): Fix it up in place instead of rejecting
-dosu review edit <page-version-id> --body-file ./revised.md
-
-# Step 4: Apply — only after the user OKs this specific item.
-#   Agents are non-interactive, so --confirm is REQUIRED to actually apply;
-#   without it the command prints the diff and aborts.
-dosu review approve <page-version-id> --confirm --json
-dosu review reject  <page-version-id> --confirm --json
-
-# Undo: send an already-decided item back to pending
-dosu review revert <page-version-id> --json
+dosu review diff <item-id> --json
+dosu review approve <item-id> --confirm --json
 ```
 
-**Agent reasoning**: Act on the specific `id` the user named — never loop `list` into a batch approve. Read the `diff` first, confirm the decision with the user, then pass `--confirm`. Treat `Synced from source` items and anything with a Sync PR (see `dosu review context <thread-id>`) with extra care: approving pushes back to the upstream source.
+Use `reject` instead of `approve` only for the same explicitly authorized item. Follow [review-workflow.md](review-workflow.md) for edits, draft replies, upstream sync, and rollback.
 
-## Scenario 5: "Check team health and manage access"
+## Audit repository documentation
 
-A team lead wants to monitor usage and manage the team.
+Follow [audit.md](audit.md) to inspect the repository and write `.dosu/audit.json`, then invoke only the task IDs the user chooses:
 
 ```bash
-# Step 1: Check usage metrics
-dosu analytics --days 7 --json
-
-# Step 2: Check integration health
-dosu integrations list --json
-
-# Step 3: Invite a new team member
-dosu members invite newdev@company.com --role member --json
-
-# Step 4: Handle pending access requests
-dosu members requests --json
-dosu members approve requester@company.com --json
+dosu audit --tasks <comma-separated-task-ids> --json
 ```
 
-## Scenario 6: "Switch between deployments"
-
-A user manages multiple environments (staging, production).
-
-```bash
-# Step 1: See available deployments
-dosu deployments list --json
-
-# Step 2: Check current deployment
-dosu deployments info --json
-
-# Step 3: Switch to another deployment
-dosu deployments switch <deployment-id> --json
-
-# Step 4: Verify the switch
-dosu status
-```
-
-**Agent reasoning**: Switching deployments changes the active space_id and org_id in the local config. All subsequent commands operate against the new deployment.
-
-## Scenario 7: "What docs can Dosu generate for this repo?"
-
-The user wants Dosu to audit the codebase and create/refresh `AGENTS.md`, `README.md`,
-`architecture.md`, or `deps.md`.
-
-```bash
-# Step 0 (in the coding agent): run the codebase audit.
-# Inspect the working tree + Dosu MCP, then write .dosu/audit.json.
-# See references/audit.md for the full procedure and references/audit-findings-schema.md
-# for the file format. The agent does NOT write the docs themselves.
-
-# Step 1: hand off to the CLI — it reads .dosu/audit.json, asks which docs to generate,
-# fires server-side generation, and Dosu cloud opens a PR.
-dosu audit
-
-# The command returns immediately; the PR is surfaced on a later `dosu` run,
-# like the "update available" notice.
-```
-
-**Agent reasoning**: The audit is triage done in the coding agent (it has the live working tree);
-generation and the PR happen on Dosu cloud, gated by the user's selection in `dosu audit`. Recommend
-`architecture.md` only when the repo is structured enough to warrant one.
+The coding agent performs triage; Dosu cloud generates docs and opens the PR.

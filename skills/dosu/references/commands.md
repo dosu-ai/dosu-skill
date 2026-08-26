@@ -1,156 +1,219 @@
-# Dosu CLI Command Reference
+# Dosu CLI command reference
 
-All commands support `--json` for structured output and `--help` for detailed usage.
+This file is the detailed source for the current command surface. Optional flags are in brackets. Only commands showing `--json` support structured JSON. Run the nested `--help` if the installed CLI differs.
 
-## Authentication & Setup
+## Authentication and setup
 
-| Command | Description |
-|---------|-------------|
-| `dosu login` | Authenticate via browser OAuth |
-| `dosu login --request [--json]` | Mint a login ticket for agent / human-in-the-loop auth — prints URL + ticket and exits |
-| `dosu login --check <ticket> [--json]` | Exchange a ticket created with `--request` for tokens (status: `authenticated` / `pending` / `expired`) |
-| `dosu logout` | Clear saved credentials |
-| `dosu status` | Show login state, deployment, and mode |
-| `dosu setup` | Interactive setup: auth → org → deployment → tools |
-| `dosu setup --agent --tool <id>` | Non-interactive agent setup. Emits NDJSON with `agent_next_steps`. Use `--login-ticket <t>` to resume after the user signs in, and `--deployment <id>` when the user has multiple deployments. |
+```text
+dosu login [--request | --check <ticket>] [--json] [--no-browser]
+dosu logout
+dosu status [--json]
+dosu setup [--deployment <id>] [--mode <oss|cloud>] [--agent --tool <id>]
+           [--login-ticket <ticket>]
+```
 
-### Auth quick guide
+- `--request` and `--check` are mutually exclusive login modes.
+- `setup --agent` requires `--tool`, emits NDJSON, and exits instead of waiting for a browser callback.
 
-- **JWT (`dosu login`)** powers all tRPC-backed commands.
-- **API key (`dosu setup`)** is still required for backend/Python-backed commands like `dosu ask`.
-- **Hybrid commands** `dosu docs generate`, `dosu docs auto-tag`, and `dosu docs publish` require both login and setup.
-- **Agent-driven flows** should use `dosu setup --agent --tool <id>` (or the lower-level `dosu login --request` / `--check`) — these never block on a localhost callback and always emit JSON with `agent_next_steps`.
+## Libraries
 
-## Knowledge & Search
+```text
+dosu libraries list [--json]
+dosu libraries info <library-id> [--json]
+dosu libraries create --name <name> [--visibility public|internal|private] [--json]
+dosu libraries update <library-id> [--name <name>]
+                      [--visibility public|internal|private] [--confirm] [--json]
+dosu libraries delete <library-id> [--confirm] [--json]
+```
 
-| Command | Description |
-|---------|-------------|
-| `dosu ask <question>` | AI-generated answer from knowledge base |
-| `dosu knowledge search <query>` | Semantic search across all documents |
-| `dosu knowledge list` | Show knowledge store info for current deployment |
+- Library and source IDs in this section must be UUID v4. Names are nonempty and at most 50 characters. Omitted visibility uses the App default, `internal`. `update` requires at least one changed field.
+- `update` and `delete` prompt only in an interactive non-JSON terminal; agents pass `--confirm` after authorization.
+- The last Library in an organization cannot be deleted. A successful delete hides it immediately; child-data cleanup continues asynchronously.
 
-## Codebase Audit
+### Library documentation config
 
-| Command | Description |
-|---------|-------------|
-| `dosu audit` | Read `.dosu/audit.json`, interactively pick docs, fire generation (opens a PR) |
-| `dosu audit --tasks <ids> --json` | Non-interactive: fire exactly these task ids (agent-driven path) |
-| `dosu audit --list-tasks --json` | List the doc-generation capabilities (valid task ids) — no repo or findings needed |
-| `dosu audit --yes` | Skip the prompt and fire all suggested items |
-| `dosu audit --findings <path>` | Use a findings file other than `.dosu/audit.json` |
+```text
+dosu libraries config get <library-id> [--json]
+dosu libraries config set <library-id> <setting> --value <json> [--confirm] [--json]
+```
 
-## Document Management
+Settings and values:
 
-| Command | Description |
-|---------|-------------|
-| `dosu docs list` | List documents. Filters: `--search`, `--tag`, `--limit` |
-| `dosu docs get <id>` | Get document content. Option: `--version <n>` |
-| `dosu docs create --title <t>` | Create document. Body: `--body <md>` or `--body-file <path>` |
-| `dosu docs update <id>` | Update document. Options: `--title`, `--body`, `--body-file` |
-| `dosu docs archive <id>` | Archive a document |
-| `dosu docs unarchive <id>` | Restore an archived document |
-| `dosu docs delete <id>` | Permanently delete a document |
-| `dosu docs versions <id>` | List version history |
-| `dosu docs restore <id> --version <n>` | Restore a previous version |
-| `dosu docs generate --title <t>` | AI-generate a document. Option: `--instructions` |
-| `dosu docs auto-tag <id>` | AI auto-tag a document |
-| `dosu docs import <platform> --files <ids>` | Import from github/gitlab/confluence/notion/coda |
-| `dosu docs import-status <task-id>` | Check async import progress |
-| `dosu docs publish <id> --to <platform>` | Publish to external platform (see below) |
-| `dosu docs sync-back <id>` | Bidirectional sync to Notion/Confluence |
+| Setting | JSON value |
+|---|---|
+| `commit_to_trigger_pr` | boolean |
+| `default_accept_review` | boolean |
+| `default_save_publish` | boolean |
+| `review_timeout_days` | `7`, `14`, `30`, or `90` |
 
-### Publish platform flags
+`set` reads the current version immediately before writing and sends that version with the mutation.
 
-| Platform | Required flags |
-|----------|---------------|
-| `github` | `--repo-id <id> --directory <path> --data-source-id <id>` |
-| `gitlab` | `--project-id <id> --directory <path> --data-source-id <id>` |
-| `confluence` | `--parent-page-id <id> --data-source-id <id>` |
-| `notion` | `--parent-page-id <id> --data-source-id <id>` |
-| `coda` | `--doc-id <id> --data-source-id <id>` |
+### Library sources
 
-## Tags
+```text
+dosu libraries sources list <library-id> [--json]
+dosu libraries sources attach <library-id> <source-id...> [--confirm] [--json]
+dosu libraries sources detach <library-id> <source-id...> [--confirm] [--json]
 
-| Command | Description |
-|---------|-------------|
-| `dosu tags list` | List all tags. Option: `--search` |
-| `dosu tags create --name <n>` | Create tag. Option: `--description` |
-| `dosu tags update <id> --name <n>` | Update tag name/description |
-| `dosu tags delete <id>` | Delete a tag |
-| `dosu tags add <tag-id> <page-id>` | Tag a page |
-| `dosu tags remove <tag-id> <page-id>` | Untag a page |
-| `dosu tags pages <tag-id>` | List pages with a tag. Options: `--search`, `--limit` |
+dosu libraries sources config get <library-id> <source-id> [--json]
+dosu libraries sources config update <library-id> <source-id>
+    [--issues on|off] [--pull-requests on|off] [--discussions on|off] [--wiki on|off]
+    [--include-patterns <json-string-array>] [--exclude-patterns <json-string-array>]
+    [--confirm] [--json]
+```
 
-## Threads
+- `attach` and `detach` require one or more UUID source IDs. Repeated IDs are deduplicated.
+- Detaching archives pages that source synced into this Library; copies in other Libraries are unaffected.
+- Source config requires at least one option. GitHub accepts every option above; GitLab accepts only include/exclude patterns. The App resolves the provider.
+- Pattern options replace the list. Use `[]` to clear it.
 
-| Command | Description |
-|---------|-------------|
-| `dosu threads list` | List threads. Options: `--status pending\|resolved\|archived`, `--search`, `--limit` |
-| `dosu threads get <id>` | View thread with messages |
-| `dosu threads archive <id>` | Archive a thread |
+### Library Monitor
+
+```text
+dosu libraries monitors list <library-id> [--json]
+dosu libraries monitors update <library-id> <source-id>
+    [--enabled on|off] [--paths <json-string-array>]
+    [--up-to-date-behavior emoji|comment|silent] [--confirm] [--json]
+```
+
+`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. Follow the Monitor boundary in [SKILL.md](../SKILL.md) when `setup_required` is true.
+When setup already exists but no Monitor row does, an update that omits `--enabled` creates it enabled; omitted paths and behavior default to `[]` and `emoji`.
+
+## Agents
+
+```text
+dosu agents list [--json]
+dosu agents info <agent-id> [--json]
+dosu agents create --library <library-id> --source <source-id>
+                   [--name <name>] [--guidelines <text>] [--json]
+dosu agents update <agent-id> [--name <name>] [--enabled on|off]
+                   [--guidelines <text> | --clear-guidelines] [--confirm] [--json]
+dosu agents delete <agent-id> [--confirm] [--json]
+dosu agents move <agent-id> --library <library-id> [--confirm] [--json]
+
+dosu agents config get <agent-id> [--json]
+dosu agents config set <agent-id> <existing.leaf.path>
+                       --value <json> [--confirm] [--json]
+```
+
+- Agent, Library, and source IDs in this section must be UUID v4. `create` accepts an existing GitHub, GitLab, Slack, or Teams source. The App supplies provider defaults, enables the Agent, and starts Mention-only reply behavior. Omitted name uses the source name.
+- Agent names are at most 80 characters; guidelines are at most 20,000 characters.
+- `update` requires at least one option. `--guidelines` conflicts with `--clear-guidelines`.
+- Config `set` changes one existing non-object leaf. Read the config first to select a valid path and value type.
+- `move` replaces the Agent's Library and returns the updated Agent. It does not report any historical-data migration.
+
+## Knowledge and documents
+
+```text
+dosu ask <question> [--session <id>] [--timeout <seconds>] [--json]
+dosu knowledge search <query> [--limit <positive-int>] [--json]   # default 10
+dosu knowledge list [--json]
+
+dosu docs list [--search <query>] [--topic <id>] [--limit <positive-int>] [--json]
+dosu docs get <id> [--revision <positive-int>] [--json]
+dosu docs create --title <title> [--body <markdown> | --body-file <path>] [--json]
+dosu docs update <id> [--title <title>] [--body <markdown> | --body-file <path>] [--json]
+dosu docs archive <id> [--json]
+dosu docs unarchive <id> [--json]
+dosu docs delete <id> [--json]
+dosu docs versions <id> [--json]
+dosu docs restore <id> --revision <positive-int> [--json]
+dosu docs generate --title <title> [--instructions <text>] [--json]
+dosu docs auto-tag <id> [--json]
+dosu docs import <platform> --files <comma-separated-ids> [--json]
+dosu docs import-status <task-id> [--json]
+dosu docs publish <id> --to <platform> [target flags] [--json]
+dosu docs sync-back <id> [--json]
+```
+
+- Document list defaults to 20. `create` and `update` reject combining `--body` with `--body-file`; `update` requires at least one field.
+- Import platforms: `github`, `gitlab`, `azure_devops`, `confluence`, `notion`, `coda`.
+- Publish platforms: the same six. Target flags are `--repo-id`, `--project-id`, `--parent-page-id`, `--doc-id`, `--directory`, and `--data-source-id`; Azure DevOps requires `--data-source-id`. Other target validation may occur in the backend.
+- `generate`, `auto-tag`, import, publish, and sync operations may be asynchronous. Use the returned task/status identifiers rather than assuming completion.
 
 ## Review
 
-See [Review workflow](review-workflow.md) for the end-to-end flow, triage rules, and safety guidance.
+Read [review-workflow.md](review-workflow.md) before mutating a review item.
 
-| Command | Description |
-|---------|-------------|
-| `dosu review list` | List pending review items (doc versions + draft messages). Columns: ID, Kind, Title, Source, Status, Created. Use `--json` and key off `origin`/`kind` |
-| `dosu review diff <page-version-id>` | Show the server-rendered diff for a pending version |
-| `dosu review edit <page-version-id>` | Edit a pending version in place. Body: `--body <md>` or `--body-file <path>`; also `--title` |
-| `dosu review context <thread-id>` | Get review context for a thread (type, page IDs, Sync PR URL) |
-| `dosu review approve <id> --confirm` | Approve a pending item. Prints the diff first; `--confirm` is **required to apply** (agents/non-TTY never get the interactive prompt) |
-| `dosu review reject <id> --confirm` | Reject a pending item. Prints the diff first; `--confirm` required to apply |
-| `dosu review revert <id>` | Send an already-decided item back to pending |
+```text
+dosu review list [--json]
+dosu review diff <id> [--json]
+dosu review edit <id> [--title <title>] [--body <markdown> | --body-file <path>] [--json]
+dosu review context <thread-id> [--json]
+dosu review approve <id> [--confirm] [--json]
+dosu review reject <id> [--confirm] [--json]
+dosu review revert <id> [--json]
+```
 
-`Source` is the humanized `origin`: `User created`/`User updated` (`manual_update`), `AI generated` (`llm_generated`), `Synced from source` (`sync_upstream`), `Created via API` (`api_update`).
+`edit` requires at least one field. `approve` and `reject` do not write without interactive confirmation or `--confirm`.
 
-## AI Suggestions
+## Sources, integrations, members, and organization
 
-| Command | Description |
-|---------|-------------|
-| `dosu suggest list` | List pending AI doc suggestions |
-| `dosu suggest generate` | Generate new suggestions from data sources |
-| `dosu suggest accept <id>` | Create document from suggestion. Options: `--title`, `--instructions` |
-| `dosu suggest reject <id>` | Dismiss a suggestion |
+```text
+dosu sources list [--json]
+dosu sources info <id> [--json]
+dosu sources sync <id> [--json]
+dosu sources update <id> [--name <name>] [--description <text>] [--json]
+dosu sources delete <id> [--json]
 
-## Data Sources
+dosu integrations list [--json]
+dosu integrations status <platform> [--json]
+dosu integrations slack-channels [--json]
+dosu integrations slack-join <channel-id> [--json]
+dosu integrations github-collaborators <positive-repository-id> [--json]
 
-| Command | Description |
-|---------|-------------|
-| `dosu sources list` | List connected data sources |
-| `dosu sources info <id>` | Data source details |
-| `dosu sources sync <id>` | Trigger re-sync from source |
-| `dosu sources update <id>` | Update name/description |
-| `dosu sources delete <id>` | Remove a data source |
+dosu members invite <email> [--role admin|member] [--json]       # default member
+dosu org info [--json]
+```
 
-## Team Management
+- `sources update` requires `--name` or `--description`.
+- Integration status choices: `github`, `gitlab`, `azure_devops`, `slack`, `confluence`, `notion`, `coda`, `teams`. GitHub, Slack, and Teams currently return `connected: null` because CLI status probing is unavailable for them.
+- The CLI has no member list/remove/request commands; `members invite` is its only member operation.
 
-| Command | Description |
-|---------|-------------|
-| `dosu members list` | List members and invitations |
-| `dosu members invite <email>` | Invite member. Option: `--role admin\|member` |
-| `dosu members remove <email>` | Remove a member |
-| `dosu members requests` | List pending access requests |
-| `dosu members approve <email>` | Approve access request |
-| `dosu members deny <email>` | Deny access request |
+## Threads, Topics, suggestions, and analytics
 
-## Integrations
+```text
+dosu threads list [--status pending|resolved|archived] [--search <query>]
+                  [--limit <1..100>] [--json]                    # default 20
+dosu threads get <id> [--limit <-1|positive-int>] [--json]       # default 20
+dosu threads archive <id> [--json]
 
-| Command | Description |
-|---------|-------------|
-| `dosu integrations list` | Status of all platform connections |
-| `dosu integrations status <platform>` | Check specific platform |
-| `dosu integrations slack-channels` | List Slack channels |
-| `dosu integrations slack-join <channel-id>` | Join a Slack channel |
-| `dosu integrations github-collaborators` | List GitHub collaborators |
+dosu topics list [--json]
+dosu topics pages <topic-id> [--search <query>] [--limit <positive-int>] [--json]
 
-## Organization & Deployment
+dosu suggest list [--json]
+dosu suggest generate [--json]
+dosu suggest reject <id> [--json]
 
-| Command | Description |
-|---------|-------------|
-| `dosu org info` | Show organization(s) |
-| `dosu deployments list` | List all deployments |
-| `dosu deployments info` | Current deployment details |
-| `dosu deployments switch <id>` | Switch active deployment |
-| `dosu analytics` | Usage stats. Options: `--days <n>` |
+dosu analytics [--days <positive-int>] [--json]                  # default 30
+```
+
+Topics are read-only. The CLI has no `tags` command and no suggestion-accept command.
+
+## MCP deployments and local utilities
+
+```text
+dosu deployments list [--json]
+dosu deployments info [--json]
+dosu deployments switch <id> [--json]
+
+dosu mcp list
+dosu mcp add <agent> [--global] [--show-secret]
+dosu skill install | remove | update
+dosu telemetry status [--json]
+dosu telemetry enable | disable | reset
+dosu insights
+dosu upgrade
+dosu logs [--tail [n]] [--clear]
+```
+
+`deployments` selects the MCP deployment stored in local config; it is distinct from `agents`. `insights` opens an interactive visual report. `logs --clear` deletes the CLI log file.
+
+## Codebase audit
+
+```text
+dosu audit [--findings <path>] [--data-source-id <id>]
+           [--tasks <comma-separated-task-ids> | --yes] [--list-tasks] [--json]
+```
+
+The coding agent writes the findings; Dosu generates the selected docs. Follow [audit.md](audit.md) and [audit-findings-schema.md](audit-findings-schema.md).

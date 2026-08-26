@@ -1,392 +1,83 @@
 ---
 name: dosu
-description: 'Guide for using the Dosu CLI to set up Dosu for coding agents, configure Dosu MCP, authenticate, select deployments, and manage knowledge bases, documents, conversations, team members, and integrations. Use when the user wants to set up Dosu CLI or MCP for an agent, search their knowledge base, create or edit documents, manage threads, check analytics, review document changes, import docs from GitHub/Confluence/Notion, audit a codebase for docs Dosu can generate (AGENTS.md, README.md, architecture.md, deps.md), or perform any Dosu platform operation without opening the web dashboard.'
+description: 'Use the Dosu CLI to authenticate and configure coding agents; manage Libraries, Agents, sources, Monitor, documents, reviews, threads, topics, members, integrations, and deployments; query knowledge; or audit a repository for Dosu-generated docs. Use for Dosu platform work that should be done from a terminal instead of the web app.'
 ---
 
-# Using the Dosu CLI
+# Use the Dosu CLI
 
-The Dosu CLI (`dosu`) gives agents and users full access to the Dosu platform from the terminal.
-Commands that expose `--json` support structured output; use `--help` for command-specific options.
+Operate Dosu through `dosu`. Prefer structured output and let the CLI and App validate product rules.
 
-## When to use this skill
+## Start correctly
 
-Activate when the user wants to:
-- Search or query their organization's knowledge base
-- Create, edit, review, or publish documentation
-- Manage conversation threads from GitHub/Slack
-- Check usage analytics or team activity
-- Manage team members, data sources, or integrations
-- Perform any action they'd normally do in the Dosu web dashboard
+1. Run `dosu --version`. Do not probe installation with unrelated package-manager commands.
+2. If it is unavailable and Node is present, try `npx -y @dosu/cli --version` and use `npx -y @dosu/cli` as the command prefix for this session. Otherwise ask before installing anything.
+3. Run `dosu --help` or the relevant nested `--help` before using a command not covered by [the command reference](references/commands.md).
+4. Pass `--json` whenever that leaf command exposes it. Parse the result; do not scrape the human table.
 
-## Prerequisites
+## Satisfy the right prerequisite
 
-### Step 0 — Verify the Dosu CLI is installed
+- `dosu login` supplies the JWT used by tRPC-backed commands.
+- `dosu setup` selects an organization, Library context, and MCP deployment, creates an API key, and can configure an agent tool.
+- `dosu ask` needs an API key. `docs generate`, `docs auto-tag`, and `docs publish` need both JWT login and the API key. Other platform commands generally need JWT login; commands scoped to an organization or current Library also need the corresponding setup selection.
+- For coding-agent setup, follow the nonblocking `dosu setup --agent --tool <id>` workflow in [workflows.md](references/workflows.md). Relay its URL and execute its returned `resume_command`; never invent ticket commands.
 
-Before running anything else, check that `dosu` is on the PATH:
+## Use current product terms
 
-```bash
-dosu --version
-```
+- **Organization** is the account and permission boundary.
+- **Library** is the knowledge container shown in the App. Older APIs may call it a `space`; do not present that internal name to users.
+- **Data source** is an organization-level connection such as a repository, Slack channel, or Notion workspace. A Library can use already-connected sources.
+- **Agent** is a configurable GitHub, GitLab, Slack, or Teams deployment serving exactly one Library.
+- **Monitor** is per Library and source. It supports GitHub, GitLab, and Azure DevOps sources.
+- `dosu deployments` manages selectable **MCP deployments**. Do not use it as an Agent CRUD command.
 
-**If `dosu` is not found**, ask the user **one** question and stop:
+## Route by intent
 
-> Dosu CLI isn't installed on this machine. Want me to install it for you?
-> Pick one:
-> - **npm** (cross-platform, needs Node 18+): `npm install -g @dosu/cli`
-> - **Homebrew** (macOS/Linux, cleanest — no Gatekeeper prompt): `brew install dosu-ai/dosu/dosu`
-> - **curl** (macOS/Linux without Node): `curl -fsSL https://raw.githubusercontent.com/dosu-ai/dosu-cli/main/install.sh | sh`
-
-After the user picks one and confirms, run that exact command, then re-run `dosu --version` to verify before continuing.
-
-**`npx` works without installing.** If `dosu` is not on the PATH but Node is available, every command in this skill can be run as `npx -y @dosu/cli <command>` instead of `dosu <command>` (e.g. `npx -y @dosu/cli audit --json`). Check with `npx -y @dosu/cli --version`, and if it works, substitute that prefix for `dosu` throughout the session — no install question needed. Only fall back to the install question above when neither `dosu` nor `npx` is usable. Note `npx` does not put a `dosu` command on the PATH; mention the persistent install options once so the user can adopt one later.
-
-Do NOT pre-emptively run `which dosu`, `npm ls -g`, `brew list`, `ls /usr/local/bin/dosu`, etc. — `dosu --version` is the only check you need.
-
-### Step 1 — Authenticate
-
-Once the CLI is installed, the split auth model:
-
-```bash
-dosu login    # Browser OAuth → saves access token for JWT-authenticated tRPC commands
-dosu setup    # Interactive: select org → deployment → create API key → configure tools
-dosu status   # Verify: shows login state, deployment, and mode
-```
-
-- **`dosu login`** is required for all tRPC-backed commands. It saves a Supabase access token used to authenticate requests via `Supabase-Access-Token`.
-- **`dosu setup`** is required whenever a command needs deployment/space selection or an API key. In practice, that means `ask`, plus the backend-backed document actions `docs generate`, `docs auto-tag`, and `docs publish`.
-- For full CLI capability, agents should usually run **both** `dosu login` and `dosu setup` before starting work.
-
-If a command fails with "Not logged in", run `dosu login`. If it fails with "API key not configured" or "Run 'dosu setup'", run `dosu setup`.
-
-**For agent-driven flows**, prefer `dosu setup --agent --tool <id>` (see [Agent-assisted setup](#agent-assisted-setup) below). It composes login + setup in a non-blocking, JSON-output, ticket-based flow designed for coding agents running the CLI on the user's behalf.
-
-## Agent-assisted setup
-
-When the user asks you to set up Dosu for their coding agent, do not start with a long questionnaire. Infer the target agent when it is obvious (you are Claude Code → `--tool claude`; you are running inside Cursor → `--tool cursor`; etc.); otherwise ask only which agent to configure and proceed.
-
-Run the agent-friendly setup command:
-
-```bash
-dosu setup --agent --tool <id>
-```
-
-Replace `<id>` with the target tool id. Common ids: `codex`, `claude`, `cursor`, `vscode`, `gemini`, `windsurf`, `zed`, `cline`, `cline-cli`, `copilot`, `opencode`, `antigravity`, `mcporter`. Run `dosu mcp list` if unsure.
-
-### How `--agent` mode behaves
-
-`--agent` is **non-interactive** and emits **one JSON line per step** (NDJSON) to stdout. Every event has a `status` field; events that need follow-up include an `agent_next_steps` field telling you exactly what to do. Always read the JSON — don't rely on text formatting.
-
-The command **always exits in a few seconds** — it never blocks waiting for a browser callback. If the user is not signed in, the CLI returns a login ticket and exits; you relay the URL, wait for the user to confirm, then re-run a follow-up command with that ticket.
-
-### Steps the agent should follow
-
-1. **Run** `dosu setup --agent --tool <id>` and capture stdout.
-
-2. **For each JSON line**, switch on `status`:
-
-   - `"need_user_action"` — the CLI minted a login ticket. The event includes a `url` (where the user signs in) and a `resume_command` (what you run after they confirm). Do this:
-     1. Show the user the `url` and ask them to open it and complete sign-in.
-     2. After the user confirms they signed in, run the exact `resume_command` string (it already contains `--login-ticket`).
-   - `"pending"` (only after running a `resume_command`) — the user hasn't finished signing in yet. Ask the user to confirm again, then re-run the same `resume_command`.
-   - `"ok"` — progress event for `auth`, `deployment`, `api_key`, `mcp_install`, etc. Keep reading.
-   - `"error"` — read `reason` (machine code) and `agent_next_steps` (human/agent fallback). Common reasons:
-     - `multiple_deployments` — the user has more than one deployment. Run `dosu deployments list --json`, show options, ask the user to pick, then re-run the original command with `--deployment <id>` appended.
-     - `unknown_tool` / `tool_unsupported_in_agent_mode` — fix the `--tool` value and retry.
-     - `ticket_expired` — re-run the same `dosu setup --agent --tool <id>` (without `--login-ticket`) to mint a fresh ticket.
-   - `"done"` — setup succeeded. Tell the user setup is complete.
-
-3. **After `"done"`**, run `dosu status` to verify. Then offer the codebase audit — e.g. *"Dosu's set up. Want me to check what docs Dosu can generate for this repo (AGENTS.md, README, architecture, deps)?"* If the user agrees, run the audit and hand off to generation per [Codebase audit](#codebase-audit) below. Also invite them to try a Dosu question in their agent.
-
-### Example event flow
-
-```jsonc
-// First call: user is not signed in
-{"step":"auth","status":"need_user_action",
- "ticket":"…","url":"https://app.dosu.dev/cli/auth?ticket=…",
- "resume_command":"npx @dosu/cli@latest setup --agent --tool claude --login-ticket …",
- "expires_in":600,
- "agent_next_steps":"Give the URL to the user so they can sign in. Wait for confirmation, then run resume_command to finish setup."}
-
-// After user confirms sign-in and you run resume_command:
-{"step":"auth","status":"ok","email":"user@example.com"}
-{"step":"deployment","status":"ok","deployment_id":"…","name":"acme/main"}
-{"step":"api_key","status":"ok","reused":false}
-{"step":"mcp_install","status":"ok","tool":"claude","tool_name":"Claude Code","config_path":"…"}
-{"step":"done","status":"ok","agent_next_steps":"Dosu MCP is configured for Claude Code. …"}
-```
-
-### Lower-level primitives
-
-`dosu setup --agent` composes two lower-level commands you can also invoke directly when you only need auth:
-
-```bash
-dosu login --request --json                # Mint ticket; prints {ticket,url,check_command,agent_next_steps}; exits
-dosu login --check <ticket> --json         # Redeem ticket → save tokens; returns status authenticated|pending|expired
-```
-
-These mirror Netlify CLI's `login --request` / `--check` and are useful when you just need to authenticate the CLI without touching MCP config.
-
-## Key concepts
-
-Understanding Dosu's domain model helps choose the right commands:
-
-- **Organization** — the top-level account. Users belong to one or more orgs.
-- **Deployment** — an instance of Dosu within an org. Each has its own knowledge base and configuration.
-- **Space** — the container for a deployment's content (threads, pages, analytics).
-- **Knowledge Store** — the indexed collection of all connected data. Lives within a space.
-- **Data Source** — a connection to an external platform (GitHub repo, Slack workspace, Confluence space, Notion workspace, Coda doc). Data is synced from sources into the knowledge store.
-- **Page/Document** — a unit of documentation. Can be created manually, generated by AI, or imported from a data source.
-- **Tag** — a topic label for organizing pages within the knowledge store.
-- **Thread** — a conversation originating from GitHub issues, Slack messages, or the Dosu chat. Has messages, a status (pending/resolved/archived), and may trigger document reviews.
-
-## Core workflows
-
-### 1. Finding information
-
-Start with the most direct approach, then broaden:
-
-```bash
-# Direct question — AI generates an answer from the knowledge base
-dosu ask "How does our authentication flow work?" --json
-
-# Semantic search — find relevant documents by similarity
-dosu knowledge search "authentication" --json
-
-# Browse by topic — find pages tagged with a specific topic
-dosu tags pages <tag-id> --json
-```
-
-Use `dosu ask` when the user wants an **answer**. Use `dosu knowledge search` when they want to find **source documents**.
-
-### 2. Creating and managing documentation
-
-```bash
-# Create from markdown (agents: write to a file first, then pass it)
-dosu docs create --title "API Guide" --body-file ./draft.md --json
-
-# AI-generated documentation (async — starts generation in background)
-dosu docs generate --title "Onboarding Guide" --instructions "Focus on new developer setup" --json
-
-# AI-suggested documentation topics
-dosu suggest generate --json      # Generate suggestions from connected sources
-dosu suggest list --json          # List pending suggestions
-dosu suggest accept <id> --json   # Accept and create a document from a suggestion
-```
-
-### 3. Document review and publishing
-
-Documents go through a lifecycle: **draft → review → published → synced**.
-
-```bash
-# List the review queue: doc versions + draft messages (ID, Kind, Title, Source, Status, Created)
-dosu review list --json
-
-# Read the exact change before acting
-dosu review diff <page-version-id> --json
-
-# Edit a pending version in place instead of rejecting it
-dosu review edit <page-version-id> --body-file ./revised.md
-
-# Apply a decision — see the safety rules below. --confirm is required for agents.
-dosu review approve <page-version-id> --confirm --json
-dosu review reject <page-version-id> --confirm --json
-dosu review revert <page-version-id> --json   # undo: back to pending
-
-# Map a thread to its review (type, page IDs, Sync PR URL)
-dosu review context <thread-id> --json
-
-# Publish to external platform
-dosu docs publish <page-id> --to confluence --parent-page-id <id> --data-source-id <id> --json
-
-# Sync changes back to source (Notion/Confluence bidirectional sync)
-dosu docs sync-back <page-id> --json
-```
-
-#### Reviewing changes safely
-
-Approving and rejecting are destructive, outward-facing actions. Follow these rules:
-
-- **Act on an explicit item.** Only approve/reject the `id` the user named. If they say "review my queue", run `dosu review list` and show it — do not decide for them.
-- **Diff before deciding.** Run `dosu review diff <id>` and show the user what changes. Under `--json` (which agents always use) `approve`/`reject` print **no** preview and **no** prompt, so `diff` is the only way to see the change first. To apply, the agent **must** pass `--confirm`; without it the command changes nothing and returns `{ "applied": false, "confirmRequired": true }`. Only pass `--confirm` after the user OKs that specific item.
-- **Never batch-accept.** No loop that approves everything in `list`. One item, one confirmation.
-- **Extra care for sync/PR-origin items.** Items with `Source: Synced from source` (`origin: sync_upstream`) or a `Sync PR` URL in `dosu review context` push back to an upstream system on approval. Call this out and get explicit sign-off before approving.
-
-See [Review workflow](references/review-workflow.md) for the end-to-end session, including feeding PR context.
-
-### 4. Importing external documentation
-
-Import follows a 3-step pattern: identify files → start import → check status.
-
-```bash
-# Start import (pass comma-separated IDs)
-dosu docs import github --files "file-id-1,file-id-2" --json
-
-# Check progress
-dosu docs import-status <task-id> --json
-```
-
-Supported platforms: `github`, `gitlab`, `confluence`, `notion`, `coda`.
-Note: The platform integration must already be connected via the web dashboard before importing.
-
-### 5. Managing conversations
-
-```bash
-dosu threads list --status pending --json    # Unresolved threads
-dosu threads get <id> --json                 # Thread with messages
-dosu threads archive <id> --json             # Archive resolved thread
-```
-
-### 6. Team and access management
-
-```bash
-dosu members list --json                          # Current members and invitations
-dosu members invite user@example.com --role admin  # Invite (role: admin or member)
-dosu members requests --json                       # Pending access requests
-dosu members approve user@example.com              # Approve request
-```
-
-### 7. Checking health and analytics
-
-```bash
-dosu analytics --days 7 --json    # Usage stats: response count, answer rate, confidence distribution
-dosu integrations list --json     # Connection status for all platforms
-dosu sources list --json          # Connected data sources
-```
-
-## Codebase audit
-
-When the user asks what Dosu can do for their codebase — or asks to set up / refresh their agent
-docs, README, architecture doc, or dependency doc — run a **codebase audit**. You inspect the
-working tree and decide, with evidence, whether Dosu can help by creating or refreshing four docs:
-`AGENTS.md`, `README.md`, `architecture.md`, and `deps.md`.
-
-The audit is **triage only**: you inspect the repo and write findings to `.dosu/audit.json`. You do
-**not** write the docs yourself — Dosu cloud generates them and opens a PR once the user picks which
-ones to do.
-
-High level:
-
-1. Identify the repo (`git config --get remote.origin.url` → `owner/name`).
-2. Inspect the working tree for each of the four doc types (exists? stale? enough structure?).
-3. Use the Dosu MCP knowledge tools to factor in org knowledge before deciding — call whichever
-   read tool the server lists (`read_knowledge`, or `init_knowledge` on older connections), then
-   any deeper search tools it exposes. If no deployment is connected, skip this step and note it
-   in the `rationale`.
-4. Write `.dosu/audit.json` (one entry per doc type assessed). Gate `architecture.md` strictly —
-   only recommend it when the repo is structured enough to warrant one.
-
-### The four tasks and the findings format
-
-These four `task` ids are the only valid values — they map to backend capabilities
-(`dosu audit --list-tasks --json` prints the live list):
-
-| `task` | `type` | `file` | Recommend when |
-|---|---|---|---|
-| `generate-agents-md` | `agents` | `AGENTS.md` | Missing, or stale/thin vs. the repo's commands and conventions. |
-| `refresh-readme` | `readme` | `README.md` | Present but **outdated** with concrete evidence. |
-| `generate-architecture-md` | `architecture` | `architecture.md` | **Missing AND** the repo has real structure (multiple modules, clear layering). |
-| `generate-deps-md` | `deps` | `deps.md` | Missing, or out of sync with the dependency manifests. |
-
-`.dosu/audit.json` shape (`version` is always `1`; one `items` entry per type assessed, including
-`can_help: false` ones):
-
-```json
-{
-  "version": 1,
-  "generated_at": "<ISO 8601>",
-  "repo": { "remote": "<origin URL verbatim>", "slug": "<owner/name>" },
-  "items": [
-    {
-      "task": "generate-agents-md",
-      "type": "agents",
-      "file": "AGENTS.md",
-      "status": "missing | outdated | present_ok",
-      "action": "create | update | skip",
-      "can_help": true,
-      "confidence": "high | medium | low",
-      "rationale": "Specific, evidence-citing reason — forwarded to Dosu cloud as generation guidance.",
-      "evidence": ["repo-relative/paths.ts", "optionally/with:42"]
-    }
-  ]
-}
-```
-
-### Handing off to generation — two paths
-
-**Agent-driven (preferred when you're in the loop, e.g. right after setup).** Present the picks to
-the user in chat — list each offerable doc with its confidence and a one-line reason, and ask which
-they want. Then fire exactly their choices, non-interactively:
-
-```bash
-dosu audit --tasks generate-agents-md,generate-deps-md --json
-```
-
-This prints `{ "task_ids": [...] }` and returns immediately; Dosu cloud generates the docs and opens
-a PR. The user is notified of the PR on a later `dosu` run (like the update notice). Only pass task
-ids that you offered (the `task` field of `can_help` items in `.dosu/audit.json`).
-
-**CLI-only (the user drives the terminal).** Just tell them: *"Audit complete — run `dosu audit` to
-choose which docs Dosu should generate."* The CLI reads `.dosu/audit.json`, shows an interactive
-multiselect, and fires the selected tasks. Use this when you are not able to present the picks
-yourself (no chat surface).
-
-In both cases the repo must be connected to Dosu (done during `dosu setup`); `dosu audit` enforces
-that before firing.
-
-The section above is self-sufficient. When the reference files below are present, also read
-[references/audit.md](references/audit.md) and
-[references/audit-findings-schema.md](references/audit-findings-schema.md) for the full procedure
-and field-by-field schema; if they're missing from this install, proceed with the tables above.
-
-## Agent guidelines
-
-### Prefer structured output
-
-When acting as an agent, pass `--json` when the command exposes it and parse the returned JSON. Some commands do not offer the flag, and `dosu setup --agent` emits NDJSON automatically; follow the command examples in this skill and use `--help` when unsure.
-
-### Choosing the right command
-
-| User intent | Command | Why |
-|---|---|---|
-| "What does X do?" / "How does Y work?" | `dosu ask "<question>"` | AI-generated answer with sources |
-| "Find docs about X" / "Search for X" | `dosu knowledge search "<query>"` | Semantic similarity search |
-| "Show me the document about X" | `dosu docs get <id>` | Direct document retrieval |
-| "Write documentation for X" | `dosu docs generate --title "X"` | AI generates a full document |
-| "What's going on?" / "Any open issues?" | `dosu threads list --status pending` | Pending conversation threads |
-| "How are we doing?" / "Usage stats" | `dosu analytics --days 30` | Usage metrics |
-
-### Error handling
-
-- **`command not found: dosu`** → No global install. Try `npx -y @dosu/cli --version`; if that works, use the `npx -y @dosu/cli` prefix for all commands this session. Otherwise go back to Prerequisites § Step 0 and ask the user to pick an install method; do not retry `dosu` until install is verified with `dosu --version`.
-- **"Not logged in"** → Run `dosu login` (needed for all tRPC commands and hybrid JWT+API-key commands). For agent-driven flows, use `dosu login --request --json` instead and follow the returned `agent_next_steps`.
-- **"API key not configured"** → Run `dosu setup` (needed for `ask`, `docs generate`, `docs auto-tag`, `docs publish`). For agent flows, use `dosu setup --agent --tool <id>`.
-- **"Missing space/org config"** → Run `dosu setup` to select a deployment
-- **"No knowledge store found"** → The current deployment has no knowledge store configured
-- **"session expired"** → The CLI auto-refreshes tokens, but if refresh fails, run `dosu login` again
-- **tRPC errors** → Check the error message; usually a server-side issue or missing data
-
-### Authentication notes
-
-Most commands use the user's Supabase access token (from `dosu login`) to authenticate with the tRPC API. Backend/Python calls still use an API key from `dosu setup`. A few document commands are hybrid and require both:
-
-| Auth method | Commands |
+| Intent | Route |
 |---|---|
-| **Access token (JWT)** | All tRPC-backed commands: `threads`, `tags`, `knowledge`, `sources`, `deployments`, `org`, `members`, `integrations`, `review`, `suggest`, `analytics`, and most `docs` commands (`list`, `get`, `create`, `update`, `archive`, `unarchive`, `delete`, `versions`, `restore`, `import`, `import-status`, `sync-back`) |
-| **API key only** | `ask` |
-| **JWT + API key** | `docs generate`, `docs auto-tag`, `docs publish` |
+| Create or configure a Library | `dosu libraries ...` |
+| Attach existing organization sources | `dosu sources list` → `dosu libraries sources attach` |
+| Create or configure an Agent | `dosu agents ...` |
+| Ask for a synthesized answer | `dosu ask` |
+| Find source documents | `dosu knowledge search`, then `dosu docs get` |
+| Create, import, or publish docs | `dosu docs ...` |
+| Review a pending doc change or draft reply | Read [review-workflow.md](references/review-workflow.md) first |
+| Inspect conversations | `dosu threads ...` |
+| Browse managed topics | `dosu topics ...` |
+| Audit agent docs, README, architecture, or dependencies | Read [audit.md](references/audit.md) first |
 
-If the user has run `dosu login` but not `dosu setup`, most tRPC commands will work, but `ask` and the backend-backed doc generation/publishing commands will fail. If the user has run `dosu setup` but not `dosu login`, `ask` may still work, but most of the CLI will not.
+Use [commands.md](references/commands.md) as the sole detailed command and flag reference. Use [workflows.md](references/workflows.md) only for multi-command composition.
 
-### Limitations
+## Apply Library and Agent semantics
 
-- **Connecting new integrations** requires the web dashboard (OAuth browser flow). The CLI can view and manage existing integrations, but cannot initiate new OAuth connections.
-- **Billing and subscription management** is not available through the CLI.
-- **Document editing** accepts markdown strings only — no rich text or WYSIWYG editor.
+- To assemble a Library, list organization sources, create the Library, attach the chosen source IDs, then verify with `libraries info` and `libraries sources list`. The CLI cannot establish a brand-new OAuth connection.
+- `libraries sources config` resolves the provider on the App side. Read the command reference before choosing provider-specific options.
+- A Monitor row must already be set up for that source in the web App. If `setup_required` is true or update returns `PRECONDITION_FAILED`, send the user to the Library Sources page; do not create hidden deployment state.
+- Create an Agent from an existing source ID and let the App choose its defaults; do not synthesize config in shell commands.
+- Read Agent config before changing one existing leaf. Values are JSON. If a concurrent write returns `CONFLICT`, read again, re-evaluate the requested change, and retry only if it is still correct.
+- Moving an Agent replaces its Library. Verify the returned `space_id`; do not infer migration behavior for historical data from the move receipt.
 
-## Reference files
+## Respect write boundaries
 
-- [Command reference](references/commands.md) — Complete command tree with all subcommands
-- [Workflow examples](references/workflows.md) — End-to-end scenarios for common tasks
-- [Review workflow](references/review-workflow.md) — Working the review queue safely, with PR context
-- [Codebase audit](references/audit.md) — Full procedure for auditing a repo and writing `.dosu/audit.json`
-- [Audit findings schema](references/audit-findings-schema.md) — The `.dosu/audit.json` format the `dosu audit` CLI reads
+- Treat an explicit, unambiguous user request for the exact mutation as authorization. Otherwise show the intended change and wait for confirmation.
+- For commands exposing `--confirm`, omit it first when a preview is useful; `{ "confirmRequired": true, "applied": false }` means nothing changed. Pass `--confirm` only after authorization.
+- Never batch-approve or batch-reject review items. Diff one item, explain it, and decide only the ID the user authorized.
+- Before deleting a Library, Agent, source, or document, state the exact target and impact. Before detaching a source, read and state the impact documented in the command reference. Some older delete commands do not enforce `--confirm`; the absence of a CLI prompt is not user approval.
+- Before attaching a source to a public Library, warn that its content becomes available to everyone who can access that Library.
+- OAuth connection, billing, and first-time Monitor setup remain web-only. Report the boundary instead of claiming success.
+
+## Handle failures literally
+
+- `Not logged in` or an unrecoverable expired session: run `dosu login` (agent setup may instead return a ticket flow).
+- Missing organization, Library, deployment, or API-key context: run the appropriate `dosu setup` flow.
+- `confirmRequired`: no write occurred.
+- `CONFLICT` on config: reread before retrying.
+- `PRECONDITION_FAILED` for Monitor: complete first-time setup in the web App.
+- A tRPC or backend error is a failed operation. Surface the code/path/status and do not imply the requested state exists.
+
+## References
+
+- [commands.md](references/commands.md): authoritative CLI syntax, choices, defaults, conflicts, and prerequisites
+- [workflows.md](references/workflows.md): reusable multi-command flows
+- [review-workflow.md](references/review-workflow.md): review safety and context
+- [audit.md](references/audit.md): repository audit procedure
+- [audit-findings-schema.md](references/audit-findings-schema.md): `.dosu/audit.json` contract
