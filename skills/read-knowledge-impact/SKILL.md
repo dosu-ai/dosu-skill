@@ -36,6 +36,37 @@ Write an HTML report with the results.
 
 Do **not** call `write_knowledge`. This skill only reports.
 
+## Session viewer
+
+Every highlight must include a **Review session** control that opens an
+inline transcript viewer inside the report.
+
+The viewer must:
+
+- Show a chronological, bounded window around the highlighted
+  `read_knowledge` call.
+- Visually pin and distinguish:
+  1. the user's task,
+  2. the query sent to Dosu,
+  3. the knowledge Dosu returned,
+  4. the agent's subsequent reasoning, actions, and answer.
+- Show the complete sanitized Dosu result when the source log preserved it.
+- Clearly say "Result payload unavailable in this log source" when it cannot
+  be recovered; never imply the 400-character preview is complete.
+- Show the agent's other tool calls in the window as compact action turns
+  with sanitized, truncated input and output previews — a bare tool name
+  gives no context for judging the call. Include the agent's reasoning
+  (thinking) turns before and after the call when the log records them.
+- Use a self-contained HTML dialog or drawer with no network dependency.
+- Support keyboard navigation, Escape-to-close, readable code blocks, and
+  copy buttons for the query and knowledge result.
+- Exclude system/developer instructions, secrets, PII, and receipt IDs;
+  never include full raw payloads of other tools — bounded previews only.
+- Identify the source and session, but do not expose raw filesystem paths.
+
+The summary card remains concise. Transcript detail belongs only in the
+session viewer.
+
 **Fresh run:** always re-extract and re-classify. Ignore `/tmp/rk-calls.json`, `/tmp/rk-findings.json`, and any existing HTML. Do not skip because a previous report exists.
 
 ## Do not ask
@@ -72,9 +103,11 @@ test -f "$SKILL_DIR/scripts/extract_read_knowledge.py"
 grep -F '"relevant": "Returned information was relevant to the question and solution."' \
   "$SKILL_DIR/scripts/generate_impact_report.py"
 grep -F "details class='fold'" "$SKILL_DIR/scripts/generate_impact_report.py"
+grep -F "Result payload unavailable in this log source" \
+  "$SKILL_DIR/scripts/generate_impact_report.py"
 ```
 
-If either grep fails, stop — you have a stale copy. Use the `dosu-skill` checkout at `skills/read-knowledge-impact/`.
+If any grep fails, stop — you have a stale copy. Use the `dosu-skill` checkout at `skills/read-knowledge-impact/`.
 
 Then clear previous artifacts:
 
@@ -105,7 +138,7 @@ python3 "$SKILL_DIR/scripts/extract_read_knowledge.py" \
 
 `--days` filters by **call time** (`called_at` from Cursor `<timestamp>` / Claude `timestamp`), not file mtime. A long chat last-touched today does not count last week's calls.
 
-Each call has `id`, `source`, `transcript_id`, `path`, `query`, `result_preview`, `hint` (`empty` / `overflow` / `error` / `rejected` / `unknown`), and the session’s first user task.
+Each call has `id`, `source`, `transcript_id`, `path`, `query`, `result_preview`, `hint` (`empty` / `overflow` / `error` / `rejected` / `unknown`), and the session’s first user task — plus its stable location (`tool_call_id`, `line` / `position`) and a `session_view`: a sanitized, bounded transcript window around the call with the complete Dosu result when the source log preserved it (`result_available`). Cursor JSONL transcripts generally omit tool-result payloads — the viewer then shows the query and downstream context with an honest unavailable-result state; oversized results are recovered from `agent-tools/*.txt` sidecars when possible.
 
 If the extractor prints `calls: 0`, open an empty report anyway and stop.
 
@@ -114,7 +147,7 @@ If the extractor prints `calls: 0`, open an empty report anyway and stop.
 Read [references/classification.md](references/classification.md). Classify **from the transcripts**, not from a previous findings file.
 
 1. Keep mechanical hints (`empty`, `overflow`, `error`, `rejected`) unless the transcript clearly contradicts them.
-2. For `hint=unknown`, digest the session around that call (`parse_agent_logs.py --digest <id>` from the sibling `log-to-dosu-knowledge` skill if present, otherwise read the JSONL near the tool_use).
+2. For `hint=unknown`, digest the session around that call — start from the call's `session_view.turns`, then `parse_agent_logs.py --digest <id>` from the sibling `log-to-dosu-knowledge` skill if present, otherwise read the JSONL near the tool_use.
 3. Set `outcome` to exactly one of: `relevant`, `off_topic`, `empty`, `rejected`, `overflow`, `error`, `distracting`.
 4. Fill `task`, `knowledge`, `impact` for **every** `relevant` and `distracting` call, and for overflow/error when you can see what happened. Complete sentences — never cut a field mid-word. The report folds long copy behind “more”. No raw prompts, no secrets.
 
@@ -128,7 +161,7 @@ Never use `unused`. On-topic returns that were not uniquely quoted are `relevant
 
 ### Step 3 — Findings file
 
-Write `/tmp/rk-findings.json` as `{ "window": …, "calls": [ … ] }`. Copy `window` from `/tmp/rk-calls.json` unchanged (that is how the HTML knows it was 1 day vs 30). Each call is the extractor row **plus** `outcome` / `task` / `knowledge` / `impact`. Keep extractor fields. Classify **every** call — do not sample.
+Write `/tmp/rk-findings.json` as `{ "window": …, "calls": [ … ] }`. Copy `window` from `/tmp/rk-calls.json` unchanged (that is how the HTML knows it was 1 day vs 30). Each call is the extractor row **plus** `outcome` / `task` / `knowledge` / `impact`. Keep extractor fields — in particular carry `session_view` through unchanged (you may drop a turn that leaked something sensitive, never add or rewrite turns). Every `relevant` call must keep its `session_view`; the report generator refuses to build a highlight without a working viewer. Classify **every** call — do not sample.
 
 Do **not** set `outcome_notes`. The Outcomes table copy comes from `generate_impact_report.py`. The relevant row must read exactly: "Returned information was relevant to the question and solution."
 
@@ -139,6 +172,8 @@ python3 "$SKILL_DIR/scripts/generate_impact_report.py" \
   --findings /tmp/rk-findings.json \
   --out /tmp/read-knowledge-impact.html --open
 ```
+
+The generator asserts that every highlight has a working **Review session** viewer (a `session_view` with turns) and exits with an error otherwise — fix the findings, do not strip the field.
 
 Reply with the headline numbers (calls, % relevant, highlight count, failure count) and that the HTML is open. Do not paste every card into chat.
 

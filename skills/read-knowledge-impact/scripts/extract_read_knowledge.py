@@ -49,6 +49,197 @@ USER_QUERY_RE = re.compile(
 )
 PREVIEW_CHARS = 400
 
+# Session-view contract (see SKILL.md "Session viewer"): every call carries a
+# bounded, sanitized transcript window so the report can open an inline viewer.
+RESULT_CAP = 20_000
+TURN_CHARS = 1_500
+ACTION_IN_CHARS = 300
+ACTION_OUT_CHARS = 600
+VIEW_BEFORE = 6
+VIEW_AFTER = 10
+
+_STRIP_BLOCK_RES = (
+    re.compile(r"<system-reminder>.*?</system-reminder>", re.S | re.I),
+    re.compile(r"<INSTRUCTIONS>.*?</INSTRUCTIONS>", re.S | re.I),
+    re.compile(r"<additional_data>.*?</additional_data>", re.S | re.I),
+    re.compile(r"<timestamp>.*?</timestamp>", re.S | re.I),
+    re.compile(r"<command-name>.*?</command-name>", re.S | re.I),
+)
+_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bri_(?:read|write)_[A-Za-z0-9_-]+"), "[receipt-id]"),
+    (re.compile(r"\breceipt_item_id[\"'=:\s]+[A-Za-z0-9_-]+"), "[receipt-id]"),
+    (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"), "[email]"),
+    (re.compile(r"\b(?:sk|pk)-[A-Za-z0-9_-]{16,}"), "[token]"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "[token]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "[token]"),
+    (re.compile(r"\bxox[a-z]-[A-Za-z0-9-]{10,}"), "[token]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[token]"),
+    (
+        re.compile(
+            r"\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+        ),
+        "[token]",
+    ),
+    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), "Bearer [token]"),
+    (re.compile(r"/Users/[^/\s\"']+"), "~"),
+    (re.compile(r"/home/[^/\s\"']+"), "~"),
+)
+
+
+def _sanitize(text: str, cap: int) -> str:
+    out = text or ""
+    for rx in _STRIP_BLOCK_RES:
+        out = rx.sub(" ", out)
+    for rx, repl in _REDACTIONS:
+        out = rx.sub(repl, out)
+    out = out.strip()
+    if len(out) > cap:
+        out = out[:cap].rstrip() + " …"
+    return out
+
+
+def _user_text(raw: str) -> str:
+    found = USER_QUERY_RE.findall(raw or "")
+    return "\n\n".join(found) if found else (raw or "")
+
+
+def _input_preview(inp: Any) -> str:
+    if inp is None:
+        return ""
+    if isinstance(inp, str):
+        return _sanitize(inp, ACTION_IN_CHARS)
+    try:
+        blob = json.dumps(inp, ensure_ascii=False, default=str)
+    except TypeError:
+        blob = str(inp)
+    return _sanitize(blob, ACTION_IN_CHARS)
+
+
+class _EventLog:
+    """Ordered, sanitized transcript events for one session."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+        self._action_pending: dict[str, int] = {}
+
+    def add(self, role: str, kind: str, text: str) -> int | None:
+        clean = (
+            (text or "").strip() if kind == "action" else _sanitize(text, TURN_CHARS)
+        )
+        if not clean:
+            return None
+        last = self.events[-1] if self.events else None
+        if (
+            last
+            and last.get("role") == role
+            and last.get("kind") == kind
+            and last.get("text") == clean
+        ):
+            return len(self.events) - 1
+        self.events.append({"role": role, "kind": kind, "text": clean})
+        return len(self.events) - 1
+
+    def open_action(self, tool: str, inp: Any, tool_id: Any = None) -> int | None:
+        """Record another tool's call with a sanitized input preview."""
+        name = (tool or "").strip()
+        if not name:
+            return None
+        ev: dict[str, Any] = {"role": "assistant", "kind": "action", "text": name}
+        preview = _input_preview(inp)
+        if preview:
+            ev["input"] = preview
+        self.events.append(ev)
+        idx = len(self.events) - 1
+        if tool_id is not None:
+            self._action_pending[str(tool_id)] = idx
+        return idx
+
+    def close_action(self, tool_id: Any, text: str) -> bool:
+        """Attach an output preview to a pending action. True if consumed."""
+        if tool_id is None:
+            return False
+        idx = self._action_pending.pop(str(tool_id), None)
+        if idx is None:
+            return False
+        out = _sanitize(text or "", ACTION_OUT_CHARS)
+        if out:
+            self.events[idx]["output"] = out
+        return True
+
+    def add_call(self, query: str) -> int:
+        self.events.append(
+            {
+                "role": "assistant",
+                "kind": "read_knowledge",
+                "query": _sanitize(query, TURN_CHARS),
+                "result": None,
+                "result_available": False,
+            }
+        )
+        return len(self.events) - 1
+
+    def close_call(self, idx: int | None, text: str) -> None:
+        if idx is None or not (0 <= idx < len(self.events)):
+            return
+        ev = self.events[idx]
+        ev["result_available"] = bool((text or "").strip())
+        ev["result"] = _sanitize(text or "", RESULT_CAP)
+        if len(text or "") > RESULT_CAP:
+            ev["result_truncated"] = True
+
+
+def _read_sidecar(raw_path: str, transcript: Path) -> str | None:
+    """Best-effort recovery of an overflow result dumped to a sidecar file."""
+    for cand in (
+        Path(raw_path).expanduser(),
+        transcript.parent / raw_path,
+        transcript.parent / Path(raw_path).name,
+    ):
+        try:
+            if cand.is_file() and cand.stat().st_size < 2_000_000:
+                return cand.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+    return None
+
+
+def _build_session_view(
+    events: list[dict[str, Any]], idx: int | None
+) -> dict[str, Any] | None:
+    if idx is None or not (0 <= idx < len(events)):
+        return None
+    start = max(0, idx - VIEW_BEFORE)
+    end = min(len(events), idx + VIEW_AFTER + 1)
+    pinned_i = next(
+        (
+            i
+            for i, ev in enumerate(events)
+            if ev.get("role") == "user" and ev.get("kind") == "message"
+        ),
+        None,
+    )
+    turns: list[dict[str, Any]] = []
+    if pinned_i is not None and pinned_i < start:
+        turns.append({**events[pinned_i], "pinned": True})
+        turns.append({"kind": "gap"})
+    for i in range(start, end):
+        turn = dict(events[i])
+        if i == pinned_i:
+            turn["pinned"] = True
+        if i == idx:
+            turn["highlighted"] = True
+        elif turn.get("kind") == "read_knowledge" and isinstance(
+            turn.get("result"), str
+        ):
+            turn["result"] = turn["result"][:300]
+        turns.append(turn)
+    if end < len(events):
+        turns.append({"kind": "gap"})
+    return {
+        "result_available": bool(events[idx].get("result_available")),
+        "turns": turns,
+    }
+
 CURSOR_TS_RE = re.compile(
     r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
     r"(?P<day>\d{1,2}),\s+(?P<year>\d{4}),\s+"
@@ -236,11 +427,17 @@ def _args_query(args: dict[str, Any]) -> str:
 
 
 
-def _walk_extract(obj: Any, *, open_call, close_call, queries: list[str]) -> None:
+def _walk_extract(
+    obj: Any, *, open_call, close_call, queries: list[str], events: _EventLog | None = None
+) -> None:
     if isinstance(obj, list):
         for item in obj:
             _walk_extract(
-                item, open_call=open_call, close_call=close_call, queries=queries
+                item,
+                open_call=open_call,
+                close_call=close_call,
+                queries=queries,
+                events=events,
             )
         return
     if not isinstance(obj, dict):
@@ -253,46 +450,102 @@ def _walk_extract(obj: Any, *, open_call, close_call, queries: list[str]) -> Non
             open_call(
                 kcall, obj.get("id") or obj.get("call_id") or obj.get("tool_use_id")
             )
+        elif events is not None and inp is not None:
+            aname = name
+            if isinstance(inp, dict):
+                aname = inp.get("toolName") or inp.get("tool_name") or name
+            events.open_action(
+                str(aname),
+                inp,
+                obj.get("id") or obj.get("call_id") or obj.get("tool_use_id"),
+            )
     btype = obj.get("type")
     payload = obj.get("payload")
     if isinstance(payload, dict) and not btype:
         btype = payload.get("type")
     if btype in {"tool_result", "function_call_output", "function_call_result"}:
         src = payload if isinstance(payload, dict) else obj
-        close_call(
-            src.get("call_id") or src.get("tool_use_id") or src.get("id") or obj.get("id"),
-            _result_text(
-                src.get("output")
-                or src.get("content")
-                or obj.get("output")
-                or obj.get("content")
-                or obj.get("result")
-            ),
-            is_error=bool(obj.get("is_error") or obj.get("isError")),
+        rid = (
+            src.get("call_id") or src.get("tool_use_id") or src.get("id") or obj.get("id")
         )
+        rtext = _result_text(
+            src.get("output")
+            or src.get("content")
+            or obj.get("output")
+            or obj.get("content")
+            or obj.get("result")
+        )
+        if not (events is not None and events.close_action(rid, rtext)):
+            close_call(
+                rid,
+                rtext,
+                is_error=bool(obj.get("is_error") or obj.get("isError")),
+            )
     role = obj.get("role") or obj.get("speaker") or obj.get("type")
     text_val = obj.get("text")
     if isinstance(obj.get("content"), str) and not text_val:
         text_val = obj.get("content")
     if isinstance(text_val, str) and role in {"user", "human", "user_message"}:
         queries.extend(USER_QUERY_RE.findall(text_val) or [text_val[:2000]])
+        if events is not None:
+            events.add("user", "message", _user_text(text_val))
+    elif (
+        isinstance(text_val, str)
+        and role in {"assistant", "ai", "agent"}
+        and events is not None
+    ):
+        events.add("assistant", "message", text_val)
     for value in obj.values():
         if isinstance(value, (dict, list)):
             _walk_extract(
-                value, open_call=open_call, close_call=close_call, queries=queries
+                value,
+                open_call=open_call,
+                close_call=close_call,
+                queries=queries,
+                events=events,
             )
+
+
+def _load_records_fallback(path: Path):
+    """JSON / JSONL reader used when the generic_logs helper is unavailable."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    stripped = text.lstrip()
+    if stripped.startswith(("{", "[")) and "\n{" not in text and "\n[" not in text:
+        try:
+            doc = json.loads(text)
+        except json.JSONDecodeError:
+            doc = None
+        if isinstance(doc, list):
+            yield from doc
+            return
+        if doc is not None:
+            yield doc
+            return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            continue
 
 
 def _extract_generic(path: Path, session_id: str) -> dict[str, Any]:
     scripts = _parser_scripts_dir()
     if scripts is not None and str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
-    from generic_logs import load_records  # type: ignore
+    try:
+        from generic_logs import load_records  # type: ignore
+    except ModuleNotFoundError:
+        load_records = _load_records_fallback
 
     pending: dict[str, dict[str, Any]] = {}
     calls: list[dict[str, Any]] = []
     queries: list[str] = []
+    elog = _EventLog()
     seq = 0
+    rec_index = 0
     last_ts: datetime | None = None
 
     def _open_call(kcall: dict[str, Any], tool_id: str | None) -> None:
@@ -308,6 +561,9 @@ def _extract_generic(path: Path, session_id: str) -> dict[str, Any]:
             "repo": args.get("repo"),
             "branch": args.get("branch"),
             "note_id": args.get("note_id"),
+            "tool_call_id": str(tool_id) if tool_id else None,
+            "position": rec_index,
+            "_event_idx": elog.add_call(_args_query(args)),
         }
         if last_ts is not None:
             row["called_at"] = last_ts.isoformat()
@@ -321,7 +577,9 @@ def _extract_generic(path: Path, session_id: str) -> dict[str, Any]:
         row = None
         if tool_id and str(tool_id) in pending:
             row = pending.pop(str(tool_id))
-        elif len(pending) == 1:
+        elif not tool_id and len(pending) == 1:
+            # Fallback ONLY for logs that omit result ids entirely — a result
+            # carrying a foreign tool_use_id belongs to some other tool call.
             _, row = pending.popitem()
         if row is None:
             return
@@ -330,6 +588,7 @@ def _extract_generic(path: Path, session_id: str) -> dict[str, Any]:
         row["result_chars"] = len(text)
         row["result_preview"] = text[:PREVIEW_CHARS]
         row["hint"] = _hint(text, is_error=is_error)
+        elog.close_call(row.get("_event_idx"), text)
         calls.append(row)
 
     for rec in load_records(path):
@@ -338,8 +597,13 @@ def _extract_generic(path: Path, session_id: str) -> dict[str, Any]:
             if ts is not None:
                 last_ts = ts
         _walk_extract(
-            rec, open_call=_open_call, close_call=_close_call, queries=queries
+            rec,
+            open_call=_open_call,
+            close_call=_close_call,
+            queries=queries,
+            events=elog,
         )
+        rec_index += 1
     for item in pending.values():
         item["id"] = f"generic:{session_id}:{seq}"
         seq += 1
@@ -351,6 +615,9 @@ def _extract_generic(path: Path, session_id: str) -> dict[str, Any]:
     for row in calls:
         row["user_task"] = task
         row["mtime"] = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat()
+        view = _build_session_view(elog.events, row.pop("_event_idx", None))
+        if view is not None:
+            row["session_view"] = view
     return {"calls": calls, "user_task": task}
 
 
@@ -360,8 +627,10 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
     pending: dict[str, dict[str, Any]] = {}
     calls: list[dict[str, Any]] = []
     queries: list[str] = []
+    elog = _EventLog()
     cwd: str | None = None
     seq = 0
+    lineno = 0
 
     def _flush_unmatched() -> None:
         nonlocal seq
@@ -389,6 +658,9 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
             "repo": args.get("repo"),
             "branch": args.get("branch"),
             "note_id": args.get("note_id"),
+            "tool_call_id": str(tool_id) if tool_id else None,
+            "line": lineno,
+            "_event_idx": elog.add_call(_args_query(args)),
         }
         if last_ts is not None:
             row["called_at"] = last_ts.isoformat()
@@ -404,7 +676,9 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
         row = None
         if tool_id and str(tool_id) in pending:
             row = pending.pop(str(tool_id))
-        elif len(pending) == 1:
+        elif not tool_id and len(pending) == 1:
+            # Fallback ONLY for logs that omit result ids entirely — a result
+            # carrying a foreign tool_use_id belongs to some other tool call.
             _, row = pending.popitem()
         if row is None:
             return
@@ -413,6 +687,7 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
         row["result_chars"] = len(text)
         row["result_preview"] = text[:PREVIEW_CHARS]
         row["hint"] = _hint(text, is_error=is_error)
+        elog.close_call(row.get("_event_idx"), text)
         m = re.search(
             r"(?:written to|output_file)[:\s]+([^\s]+\.(?:txt|json|jsonl))",
             text,
@@ -420,10 +695,15 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
         )
         if m:
             row["overflow_path"] = m.group(1)
+            recovered = _read_sidecar(m.group(1), path)
+            if recovered and recovered.strip():
+                elog.close_call(row.get("_event_idx"), recovered)
+                row["result_recovered"] = True
         calls.append(row)
 
     with path.open(encoding="utf-8") as f:
         for line in f:
+            lineno += 1
             line = line.strip()
             if not line:
                 continue
@@ -445,6 +725,23 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
                     msg = payload.get("message") or payload.get("text") or ""
                     if isinstance(msg, str) and msg.strip():
                         queries.extend(USER_QUERY_RE.findall(msg) or [msg[:2000]])
+                        elog.add("user", "message", _user_text(msg))
+                if etype == "event_msg" and payload.get("type") == "agent_message":
+                    msg = payload.get("message") or payload.get("text") or ""
+                    if isinstance(msg, str):
+                        elog.add("assistant", "message", msg)
+                if etype == "response_item" and payload.get("type") == "message":
+                    prole = payload.get("role") or "assistant"
+                    items = payload.get("content") or []
+                    joined = "\n".join(
+                        i.get("text") or ""
+                        for i in items
+                        if isinstance(i, dict)
+                    )
+                    if prole == "assistant":
+                        elog.add("assistant", "message", joined)
+                    else:
+                        elog.add("user", "message", _user_text(joined))
                 if etype == "response_item" and payload.get("type") == "function_call":
                     name = payload.get("name")
                     args = payload.get("arguments")
@@ -456,14 +753,20 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
                     kcall = _knowledge_call(name, args)
                     if kcall:
                         _open_call(kcall, payload.get("call_id") or payload.get("id"))
+                    elif isinstance(name, str):
+                        elog.open_action(
+                            name, args, payload.get("call_id") or payload.get("id")
+                        )
                 if etype == "response_item" and payload.get("type") in {
                     "function_call_output",
                     "function_call_result",
                 }:
-                    _close_call(
-                        payload.get("call_id") or payload.get("id"),
-                        _result_text(payload.get("output") or payload.get("content")),
+                    rid = payload.get("call_id") or payload.get("id")
+                    rtext = _result_text(
+                        payload.get("output") or payload.get("content")
                     )
+                    if not elog.close_action(rid, rtext):
+                        _close_call(rid, rtext)
                 continue
 
             role = obj.get("role")
@@ -482,6 +785,7 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
             else:
                 blocks = []
 
+            is_assistant = role == "assistant" or etype == "assistant"
             texts: list[str] = []
             for block in blocks:
                 if not isinstance(block, dict):
@@ -489,6 +793,10 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
                 btype = block.get("type")
                 if btype in {"text", "input_text", "output_text"}:
                     texts.append(block.get("text") or "")
+                    if is_assistant:
+                        elog.add("assistant", "message", block.get("text") or "")
+                elif btype == "thinking" and is_assistant:
+                    elog.add("assistant", "thinking", block.get("thinking") or "")
                 elif btype == "tool_use":
                     kcall = _knowledge_call(block.get("name"), block.get("input"))
                     if kcall:
@@ -496,15 +804,31 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
                             kcall,
                             block.get("id") or block.get("tool_use_id"),
                         )
+                    else:
+                        bname = block.get("name")
+                        binp = block.get("input")
+                        if bname == "CallMcpTool" and isinstance(binp, dict):
+                            bname = binp.get("toolName") or binp.get("tool_name") or bname
+                            binp = binp.get("arguments") or binp
+                        if isinstance(bname, str):
+                            elog.open_action(
+                                bname,
+                                binp,
+                                block.get("id") or block.get("tool_use_id"),
+                            )
                 elif btype == "tool_result":
                     chunk = _result_text(block.get("content"))
-                    _close_call(
+                    rid = (
                         block.get("tool_use_id")
                         or block.get("toolUseId")
-                        or block.get("id"),
-                        chunk,
-                        is_error=bool(block.get("is_error") or block.get("isError")),
+                        or block.get("id")
                     )
+                    if not elog.close_action(rid, chunk):
+                        _close_call(
+                            rid,
+                            chunk,
+                            is_error=bool(block.get("is_error") or block.get("isError")),
+                        )
 
             is_user = role == "user" or etype == "user"
             if is_user and texts:
@@ -517,6 +841,7 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
                     )
                 ):
                     queries.extend(USER_QUERY_RE.findall(joined) or [joined[:2000]])
+                    elog.add("user", "message", _user_text(joined))
 
     _flush_unmatched()
     task = _task_from_queries(queries)
@@ -524,6 +849,9 @@ def extract_from_jsonl(path: Path, source: str, session_id: str) -> dict[str, An
         row["cwd"] = cwd
         row["user_task"] = task
         row["mtime"] = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat()
+        view = _build_session_view(elog.events, row.pop("_event_idx", None))
+        if view is not None:
+            row["session_view"] = view
     return {"calls": calls, "cwd": cwd, "user_task": task}
 
 
@@ -584,6 +912,39 @@ def run_self_test() -> int:
                     ),
                     json.dumps(
                         {
+                            "role": "assistant",
+                            "message": {
+                                "content": [
+                                    {
+                                        "type": "thinking",
+                                        "thinking": "The typing rule matches; verify with grep.",
+                                    },
+                                    {
+                                        "type": "tool_use",
+                                        "id": "b1",
+                                        "name": "Bash",
+                                        "input": {"command": "grep -r payloads backend/"},
+                                    },
+                                ]
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "role": "user",
+                            "message": {
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": "b1",
+                                        "content": "backend/core/x.py: payloads must be dict",
+                                    }
+                                ]
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
                             "role": "user",
                             "message": {
                                 "content": [
@@ -624,13 +985,32 @@ def run_self_test() -> int:
                             },
                         }
                     ),
+                    json.dumps(
+                        {
+                            "role": "assistant",
+                            "message": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Applying the dict[str, Any] convention now.",
+                                    },
+                                    {
+                                        "type": "tool_use",
+                                        "id": "rk3",
+                                        "name": "mcp__dosu__read_knowledge",
+                                        "input": {"query": "orphaned call"},
+                                    },
+                                ]
+                            },
+                        }
+                    ),
                 ]
             )
             + "\n",
             encoding="utf-8",
         )
         out = extract_from_jsonl(cursor, "cursor", "sess-1")
-        assert len(out["calls"]) == 2, out
+        assert len(out["calls"]) == 3, out
         assert out["calls"][0]["query"] == "Confluence RBAC mypy typing"
         assert out["calls"][0]["hint"] == "unknown"
         assert out["calls"][1]["hint"] == "empty"
@@ -639,8 +1019,34 @@ def run_self_test() -> int:
         assert out["calls"][1].get("called_at", "").startswith("2026-08-21")
         cutoff = datetime(2026, 8, 20, tzinfo=UTC)
         recent = [c for c in out["calls"] if (_call_when(c) or cutoff) >= cutoff]
-        assert len(recent) == 1, recent
+        assert len(recent) == 2, recent
         assert recent[0]["query"] == "missing page"
+
+        # Session-view contract: stable location + sanitized transcript window.
+        first = out["calls"][0]
+        assert first["tool_call_id"] == "rk1"
+        assert first["line"] == 2
+        view = first["session_view"]
+        assert view["result_available"] is True
+        hl = [t for t in view["turns"] if t.get("highlighted")]
+        assert len(hl) == 1 and hl[0]["query"] == "Confluence RBAC mypy typing"
+        assert "dict[str, Any]" in hl[0]["result"]
+        pinned = [t for t in view["turns"] if t.get("pinned")]
+        assert pinned and "fix rbac mypy" in pinned[0]["text"]
+        assert "<timestamp>" not in pinned[0]["text"]
+        # Other tool calls appear as action turns with input + output previews,
+        # and their results never contaminate a knowledge call.
+        action = next(t for t in view["turns"] if t.get("kind") == "action")
+        assert action["text"] == "Bash"
+        assert "grep -r payloads" in action["input"]
+        assert "backend/core/x.py" in action["output"]
+        thinking = [t for t in view["turns"] if t.get("kind") == "thinking"]
+        assert thinking and "verify with grep" in thinking[0]["text"]
+        # Orphaned call (Cursor logs often omit tool results): honest state.
+        orphan = next(c for c in out["calls"] if c["query"] == "orphaned call")
+        assert orphan["session_view"]["result_available"] is False
+        ohl = [t for t in orphan["session_view"]["turns"] if t.get("highlighted")]
+        assert len(ohl) == 1 and ohl[0]["result"] is None
 
         claude = root / "claude.jsonl"
         claude.write_text(
@@ -684,6 +1090,7 @@ def run_self_test() -> int:
         cl = extract_from_jsonl(claude, "claude", "sess-2")
         assert cl["calls"][0]["hint"] == "error"
         assert cl["cwd"] == "/tmp/app"
+        assert cl["calls"][0]["session_view"]["result_available"] is True
 
         codex = root / "codex.jsonl"
         codex.write_text(
@@ -714,6 +1121,7 @@ def run_self_test() -> int:
         )
         cx = extract_from_jsonl(codex, "codex", "sess-3")
         assert cx["calls"][0]["hint"] == "overflow", cx["calls"][0]
+        assert cx["calls"][0]["session_view"]["result_available"] is True
         mystery = root / "mystery.jsonl"
         mystery.write_text(
             json.dumps({"speaker": "user", "text": "fix oauth retry"})
@@ -740,6 +1148,21 @@ def run_self_test() -> int:
         assert len(gen["calls"]) == 1, gen
         assert gen["calls"][0]["query"] == "oauth retry loop"
         assert gen["calls"][0]["hint"] == "empty"
+        gview = gen["calls"][0]["session_view"]
+        assert gview["result_available"] is True
+        assert any(
+            t.get("role") == "user" and "fix oauth retry" in (t.get("text") or "")
+            for t in gview["turns"]
+        )
+
+        # Sanitizer: receipt ids, emails, tokens, and home paths never survive.
+        dirty = (
+            "receipt ri_read_abc123 mail a@b.com key sk-ABCDEF1234567890XYZ "
+            "path /Users/someone/code <system-reminder>secret rules</system-reminder>"
+        )
+        clean = _sanitize(dirty, 500)
+        for needle in ("ri_read_", "a@b.com", "sk-ABCDEF", "/Users/", "secret rules"):
+            assert needle not in clean, clean
 
         print("self-test OK")
         return 0
