@@ -31,9 +31,14 @@ dosu libraries create --name "Incident Response" --visibility private --json
 dosu libraries sources attach <library-id> <repository-source-id> <handbook-source-id> \
   --confirm --json
 
+# Enable the default for each newly attached GitHub repository unless the user opted out.
+dosu libraries monitors update <library-id> <repository-source-id> \
+  --enabled on --confirm --json
+
 # Verify the final state, not just mutation receipts.
 dosu libraries info <library-id> --json
 dosu libraries sources list <library-id> --json
+dosu libraries monitors list <library-id> --json
 ```
 
 Apply the connection and public-Library safety boundaries from [SKILL.md](../SKILL.md) before attaching.

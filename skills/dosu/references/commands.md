@@ -76,8 +76,7 @@ dosu libraries monitors update <library-id> <source-id>
     [--up-to-date-behavior emoji|comment|silent] [--confirm] [--json]
 ```
 
-`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. Follow the Monitor boundary in [SKILL.md](../SKILL.md) when `setup_required` is true.
-When setup already exists but no Monitor row does, an update that omits `--enabled` creates it enabled; omitted paths and behavior default to `[]` and `emoji`.
+`update` requires at least one option. Monitor supports GitHub, GitLab, and Azure DevOps. It performs first-time setup for an attached supported source, reusing existing deployment infrastructure when available. When no Monitor row exists, omitted `--enabled`, paths, and behavior default to `true`, `[]`, and `emoji`.
 
 ## Agents
 
