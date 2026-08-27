@@ -51,7 +51,7 @@ Use [commands.md](references/commands.md) as the sole detailed command and flag 
 
 - To assemble a Library, list organization sources, create the Library, attach the chosen source IDs, then verify with `libraries info` and `libraries sources list`. The CLI cannot establish a brand-new OAuth connection.
 - `libraries sources config` resolves the provider on the App side. Read the command reference before choosing provider-specific options.
-- A Monitor row must already be set up for that source in the web App. If `setup_required` is true or update returns `PRECONDITION_FAILED`, send the user to the Library Sources page; do not create hidden deployment state.
+- When creating a Library with a GitHub repository, or newly attaching one to an existing Library, treat Monitor as part of that setup unless the user opts out. Enable it with the whole-repository and `emoji` defaults, verify it, and explain that Monitor reviews pull requests to keep the Library's knowledge up to date. Follow [the Library workflow](references/workflows.md); do not ask the user to choose defaults.
 - Create an Agent from an existing source ID and let the App choose its defaults; do not synthesize config in shell commands.
 - Read Agent config before changing one existing leaf. Values are JSON. If a concurrent write returns `CONFLICT`, read again, re-evaluate the requested change, and retry only if it is still correct.
 - Moving an Agent replaces its Library. Verify the returned `space_id`; do not infer migration behavior for historical data from the move receipt.
@@ -63,7 +63,7 @@ Use [commands.md](references/commands.md) as the sole detailed command and flag 
 - Never batch-approve or batch-reject review items. Diff one item, explain it, and decide only the ID the user authorized.
 - Before deleting a Library, Agent, source, or document, state the exact target and impact. Before detaching a source, read and state the impact documented in the command reference. Some older delete commands do not enforce `--confirm`; the absence of a CLI prompt is not user approval.
 - Before attaching a source to a public Library, warn that its content becomes available to everyone who can access that Library.
-- OAuth connection, billing, and first-time Monitor setup remain web-only. Report the boundary instead of claiming success.
+- OAuth connection and billing remain web-only. Report the boundary instead of claiming success.
 
 ## Handle failures literally
 
@@ -71,7 +71,6 @@ Use [commands.md](references/commands.md) as the sole detailed command and flag 
 - Missing organization, Library, deployment, or API-key context: run the appropriate `dosu setup` flow.
 - `confirmRequired`: no write occurred.
 - `CONFLICT` on config: reread before retrying.
-- `PRECONDITION_FAILED` for Monitor: complete first-time setup in the web App.
 - A tRPC or backend error is a failed operation. Surface the code/path/status and do not imply the requested state exists.
 
 ## References
