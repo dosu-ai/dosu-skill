@@ -24,8 +24,9 @@ This works with any number or mix of organization sources.
 # Discover connected sources and select exact IDs by provider/name.
 dosu sources list --json
 
-# Create the Library; capture its id.
-dosu libraries create --name "Incident Response" --visibility private --json
+# Create the Library; capture its id. Omitted visibility defaults to `internal`;
+# pass --visibility public|internal|private only when the user asks for it.
+dosu libraries create --name "Incident Response" --json
 
 # The user's explicit request authorizes these exact attachments.
 dosu libraries sources attach <library-id> <repository-source-id> <handbook-source-id> \
