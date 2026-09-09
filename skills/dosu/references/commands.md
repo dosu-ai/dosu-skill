@@ -154,6 +154,8 @@ dosu sources info <id> [--json]
 dosu sources sync <id> [--json]
 dosu sources update <id> [--name <name>] [--description <text>] [--json]
 dosu sources delete <id> [--json]
+dosu sources connect [github] [--json] [--timeout <seconds>] [--no-open]
+dosu sources create github --repo <owner/name> [--library <id>] [--confirm] [--json]
 
 dosu integrations list [--json]
 dosu integrations status <platform> [--json]
@@ -166,6 +168,14 @@ dosu org info [--json]
 ```
 
 - `sources update` requires `--name` or `--description`.
+- `sources connect` currently supports only `github`: it prints an install URL for the user to
+  open, then waits for the GitHub App install to complete (default 600s). With `--json` it emits
+  NDJSON events — `awaiting_install` (give the `url` to the user), then `installed` with
+  `new_repositories`, or `timeout` (exit 1). Other providers exit 1 with a web-app handoff URL.
+- `sources create` wires an installed GitHub repo into a Library: it creates (or reuses) the
+  repo's data source + deployment, attaches it, and verifies the first sync. `--library` defaults
+  to the active Library. A repo not listed means the GitHub App lacks access — run
+  `sources connect github` first. Forks can't be connected.
 - Integration status choices: `github`, `gitlab`, `azure_devops`, `slack`, `confluence`, `notion`, `coda`, `teams`. GitHub, Slack, and Teams currently return `connected: null` because CLI status probing is unavailable for them.
 - The CLI has no member list/remove/request commands; `members invite` is its only member operation.
 
