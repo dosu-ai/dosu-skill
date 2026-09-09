@@ -16,6 +16,69 @@ Read every NDJSON event:
 4. On `multiple_deployments`, list MCP deployments, let the user choose, and retry with `--deployment <id>`.
 5. Treat `done` as setup completion, then verify with `dosu status --json`.
 
+## Onboard from scratch (guided)
+
+Use this flow when the user asks to "set up Dosu", "create a library and set it up", or any
+end-to-end onboarding. It is a conversation, not a script: never invent names, never auto-pick
+sources, and stop at every checkpoint below until the user answers. Run each mutation only after
+its checkpoint. One step per turn is better than one turn with every step.
+
+**Step 0 — Discover (read-only, no confirmation needed).**
+
+```bash
+dosu status --json
+dosu sources list --json
+dosu libraries list --json
+```
+
+If not configured, run the "Configure Dosu for a coding agent" flow first. If `sources list` is
+empty, connecting a source is web-only: send the user to the App's Data Sources settings, wait
+for them to confirm, then re-run `dosu sources list --json`.
+
+**Checkpoint 1 — Scope.** Present a short summary of the connected sources (name + provider, not
+raw JSON) and any existing Libraries, then ask and wait:
+
+1. Which source(s) should the new Library use?
+2. What should the Library be called? Suggest a name derived from the chosen sources, but let the
+   user decide.
+3. Visibility: default `internal`; mention `private`/`public` only if relevant (warn about the
+   public-Library boundary from [SKILL.md](../SKILL.md)).
+4. For each chosen GitHub repository: Monitor will be enabled with defaults (whole repository,
+   `emoji`) unless they opt out.
+
+**Step 1 — Create and attach (after the user answers).**
+
+```bash
+dosu libraries create --name "<user-approved name>" --json
+dosu libraries sources attach <library-id> <chosen-source-ids...> --confirm --json
+dosu libraries monitors update <library-id> <repository-source-id> --enabled on --confirm --json
+```
+
+Report each receipt in one line as it lands (Library ID, sources attached, Monitor state).
+
+**Checkpoint 2 — Agent (optional).** Ask whether the user wants an Agent (GitHub/GitLab/Slack/Teams
+responder) on one of the attached sources. Only on yes:
+
+```bash
+dosu agents create --library <library-id> --source <source-id> --name "<user-approved name>" --json
+```
+
+A `CONFLICT` (409) means that data source already has an Agent — one Agent per source. Report which
+source conflicted and offer the alternatives: pick a different source, or (only with explicit
+authorization) `dosu agents move` the existing Agent, which removes it from its current Library.
+
+**Step 2 — Verify and hand off.**
+
+```bash
+dosu libraries info <library-id> --json
+dosu libraries sources list <library-id> --json
+dosu libraries monitors list <library-id> --json
+```
+
+Summarize the final state. Creating an MCP deployment for the new Library is not available in the
+CLI; if the user wants their MCP/CLI target pointed at this Library, send them to the App to create
+the MCP deployment, then run `dosu deployments switch`.
+
 ## Create a Library from existing sources
 
 This works with any number or mix of organization sources.
