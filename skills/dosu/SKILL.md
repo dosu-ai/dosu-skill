@@ -34,6 +34,7 @@ Operate Dosu through `dosu`. Prefer structured output and let the CLI and App va
 
 | Intent | Route |
 |---|---|
+| Set up Dosu end-to-end ("set up dosu", new Library from scratch) | Read the guided onboarding flow in [workflows.md](references/workflows.md) first; it is checkpoint-driven — ask, wait, then act |
 | Create or configure a Library | `dosu libraries ...` |
 | Attach existing organization sources | `dosu sources list` → `dosu libraries sources attach` |
 | Create or configure an Agent | `dosu agents ...` |
@@ -52,7 +53,7 @@ Use [commands.md](references/commands.md) as the sole detailed command and flag 
 - To assemble a Library, list organization sources, create the Library, attach the chosen source IDs, then verify with `libraries info` and `libraries sources list`. The CLI cannot establish a brand-new OAuth connection.
 - `libraries sources config` resolves the provider on the App side. Read the command reference before choosing provider-specific options.
 - When creating a Library with a GitHub repository, or newly attaching one to an existing Library, treat Monitor as part of that setup unless the user opts out. Enable it with the whole-repository and `emoji` defaults, verify it, and explain that Monitor reviews pull requests to keep the Library's knowledge up to date. Follow [the Library workflow](references/workflows.md); do not ask the user to choose defaults.
-- Create an Agent from an existing source ID and let the App choose its defaults; do not synthesize config in shell commands.
+- Create an Agent from an existing source ID and let the App choose its defaults; do not synthesize config in shell commands. Each data source can back at most one Agent: a `CONFLICT` (409) from `agents create` means the source already has one — offer a different source or an authorized `agents move` instead of retrying.
 - Read Agent config before changing one existing leaf. Values are JSON. If a concurrent write returns `CONFLICT`, read again, re-evaluate the requested change, and retry only if it is still correct.
 - Moving an Agent replaces its Library. Verify the returned `space_id`; do not infer migration behavior for historical data from the move receipt.
 
