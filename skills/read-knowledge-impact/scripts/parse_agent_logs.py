@@ -1945,7 +1945,7 @@ def main(argv: list[str] | None = None) -> int:
             "  Claude: $CLAUDE_CONFIG_DIR/projects/<encoded>/*.jsonl "
             f"(now: {claude_config_dir() / 'projects'})\n"
             "  Codex:  ~/.codex/sessions/**/rollout-*.jsonl\n"
-            "Pass --dir or --all-projects, or see references/history-locations.md",
+            "Pass --dir or --all-projects.",
             file=sys.stderr,
         )
         return 1
