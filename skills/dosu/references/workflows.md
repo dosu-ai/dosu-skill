@@ -31,14 +31,12 @@ dosu sources list --json
 dosu libraries list --json
 ```
 
-If not configured, run the "Configure Dosu for a coding agent" flow first. If `sources list` is
-empty, connecting a source is web-only: send the user to the App's Data Sources settings, wait
-for them to confirm, then re-run `dosu sources list --json`.
+If not configured, run the "Configure Dosu for a coding agent" flow first.
 
 **Checkpoint 1 — Scope.** Present a short summary of the connected sources (name + provider, not
 raw JSON) and any existing Libraries, then ask and wait:
 
-1. Which source(s) should the new Library use?
+1. Which source(s) should the new Library use? Existing ones, a new one, or both.
 2. What should the Library be called? Suggest a name derived from the chosen sources, but let the
    user decide.
 3. Visibility: default `internal`; mention `private`/`public` only if relevant (warn about the
@@ -46,13 +44,31 @@ raw JSON) and any existing Libraries, then ask and wait:
 4. For each chosen GitHub repository: Monitor will be enabled with defaults (whole repository,
    `emoji`) unless they opt out.
 
+**Step 0.5 — Connect a new source (only when the user asked for one).** Ask which provider. For
+GitHub, run the CLI bridge — do not send the user hunting through the App:
+
+```bash
+dosu sources connect github --json
+```
+
+Give the user the `url` from the `awaiting_install` event and wait; the command completes on its
+own when the install finishes and reports `new_repositories`. For any other provider (Slack, web
+docs, Notion, Coda, Confluence, ...) the connect flow is web-only: give the user the App URL the
+command prints, wait for them to confirm, then re-run `dosu sources list --json` to pick up the
+new source.
+
 **Step 1 — Create and attach (after the user answers).**
 
 ```bash
 dosu libraries create --name "<user-approved name>" --json
-dosu libraries sources attach <library-id> <chosen-source-ids...> --confirm --json
+dosu libraries sources attach <library-id> <existing-source-ids...> --confirm --json
+dosu sources create github --repo <owner/name> --library <library-id> --confirm --json
 dosu libraries monitors update <library-id> <repository-source-id> --enabled on --confirm --json
 ```
+
+Use `libraries sources attach` for sources that already exist; use `sources create` for a GitHub
+repo that became visible via `sources connect` but has no data source yet (it creates, attaches,
+and verifies the first sync in one receipt).
 
 Report each receipt in one line as it lands (Library ID, sources attached, Monitor state).
 
