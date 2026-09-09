@@ -147,7 +147,7 @@ If the extractor prints `calls: 0`, open an empty report anyway and stop.
 Read [references/classification.md](references/classification.md). Classify **from the transcripts**, not from a previous findings file.
 
 1. Keep mechanical hints (`empty`, `overflow`, `error`, `rejected`) unless the transcript clearly contradicts them.
-2. For `hint=unknown`, digest the session around that call — start from the call's `session_view.turns`, then `parse_agent_logs.py --digest <id>` from the sibling `log-to-dosu-knowledge` skill if present, otherwise read the JSONL near the tool_use.
+2. For `hint=unknown`, digest the session around that call — start from the call's `session_view.turns`, then `scripts/parse_agent_logs.py --digest <id>`, otherwise read the JSONL near the tool_use.
 3. Set `outcome` to exactly one of: `relevant`, `off_topic`, `empty`, `rejected`, `overflow`, `error`, `distracting`.
 4. Fill `task`, `knowledge`, `impact` for **every** `relevant` and `distracting` call, and for overflow/error when you can see what happened. Complete sentences — never cut a field mid-word. The report folds long copy behind “more”. No raw prompts, no secrets.
 

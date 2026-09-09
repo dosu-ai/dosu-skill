@@ -325,14 +325,8 @@ def _call_when(row: dict[str, Any]) -> datetime | None:
 
 def _parser_scripts_dir() -> Path | None:
     here = Path(__file__).resolve().parent
-    candidates = [
-        here.parents[1] / "log-to-dosu-knowledge" / "scripts",
-        here.parents[2] / "log-to-dosu-knowledge" / "scripts",
-        here,
-    ]
-    for path in candidates:
-        if (path / "parse_agent_logs.py").is_file():
-            return path
+    if (here / "parse_agent_logs.py").is_file():
+        return here
     return None
 
 
@@ -1189,7 +1183,7 @@ def main(argv: list[str] | None = None) -> int:
     pal = _load_discover()
     if pal is None:
         print(
-            "parse_agent_logs.py not found (install log-to-dosu-knowledge beside this skill)",
+            "parse_agent_logs.py not found next to this script",
             file=sys.stderr,
         )
         return 1
