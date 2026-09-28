@@ -1,6 +1,9 @@
-# Dosu Skill
+# Dosu Skill (archived)
 
-Agent skills for the [Dosu](https://dosu.dev) platform — gives AI coding agents (Claude Code, Cursor, Codex, etc.) full access to your knowledge base, documentation, threads, and team management.
+> [!WARNING]
+> **This repository is archived.** The Dosu agent skill now lives in
+> [dosu-ai/dosu-cli](https://github.com/dosu-ai/dosu-cli/tree/main/skills) and ships bundled
+> with the CLI. The copy here is no longer updated.
 
 ## Install
 
@@ -10,41 +13,20 @@ Agent skills for the [Dosu](https://dosu.dev) platform — gives AI coding agent
 npx @dosu/cli skill install
 ```
 
-This installs **both** skills from this repo:
-
-| Skill | Purpose |
-|-------|---------|
-| `dosu` | Use the Dosu platform (ask, docs, threads, …) |
-| `read-knowledge-impact` | Audit local logs for `read_knowledge` highlights and failures → HTML report |
+The CLI installs the skill for your coding agents and re-applies it automatically after each
+CLI upgrade.
 
 ### Via Skills CLI
 
 ```bash
-npx skills add dosu-ai/dosu-skill -g -s "*" -y
+npx skills add dosu-ai/dosu-cli -g -s dosu -y
 ```
 
-## What it does
+## `read-knowledge-impact`
 
-Once installed, agents can:
-
-- **Search & query** your organization's knowledge base (`dosu ask`, `dosu knowledge search`)
-- **Create, edit, review & publish** documentation (`dosu docs`)
-- **Manage threads** from GitHub/Slack (`dosu threads`)
-- **Import docs** from GitHub, GitLab, Confluence, Notion, Coda (`dosu docs import`)
-- **Check analytics** and team activity (`dosu analytics`)
-- **Manage team members** and integrations (`dosu members`, `dosu integrations`)
-- **Mine local Cursor / Claude Code / Codex histories** into Branch Notes (`dosu knowledge sync`)
-- **Audit `read_knowledge` impact** on recent agent trajectories (`read-knowledge-impact`)
-
-## Prerequisites
-
-```bash
-dosu login    # Browser OAuth
-dosu setup    # Select org → deployment → configure tools
-```
+The `read-knowledge-impact` skill that used to live here is no longer distributed.
 
 ## Links
 
 - [Dosu](https://dosu.dev)
 - [Dosu CLI](https://github.com/dosu-ai/dosu-cli)
-- [Skills CLI](https://skills.sh)
